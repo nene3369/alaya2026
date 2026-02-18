@@ -15,7 +15,7 @@ import hashlib
 import os
 import struct
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 from scipy import sparse
