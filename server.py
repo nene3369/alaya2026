@@ -266,8 +266,8 @@ class LearnableDharmaJ:
     def __init__(
         self,
         n: int = N_VARS,
-        eta: float = 0.005,
-        ema_decay: float = 0.995,
+        eta: float = 0.025,
+        ema_decay: float = 0.98,
         clip_range: float = 0.5,
     ):
         self.n = n
@@ -295,7 +295,12 @@ class LearnableDharmaJ:
         clipped = (clipped + clipped.T) / 2.0
         return base + sparse.csr_matrix(clipped)
 
-    def update(self, wave: list[float], converged: bool) -> None:
+    def update(
+        self,
+        wave: list[float],
+        converged: bool,
+        context: list[float] | None = None,
+    ) -> None:
         """Update learned delta based on convergence feedback.
 
         Parameters
@@ -304,15 +309,21 @@ class LearnableDharmaJ:
             4D emotion wavelength [Love, Logic, Fear, Creation].
         converged : bool
             Whether the FEP reasoning converged successfully.
+        context : list[float] | None
+            Optional full 8D context vector (emotion + moon/entropy/complexity).
+            If provided, used instead of zero-padded wave for richer learning.
         """
-        # Build outer product from wave (first 4 dims only)
-        w = np.array(wave[:4] + [0.0] * (self.n - 4))
+        # Use full 8D context if available, else zero-pad 4D wave
+        if context is not None:
+            w = np.array(context[:self.n])
+        else:
+            w = np.array(wave[:4] + [0.0] * (self.n - 4))
         outer = np.outer(w, w)
 
         if converged:
             self._delta += self.eta * outer
         else:
-            self._delta -= self.eta * 0.3 * outer
+            self._delta -= self.eta * 0.5 * outer
 
         # EMA decay to prevent unbounded growth
         self._delta *= self.ema_decay
@@ -552,12 +563,16 @@ class ReasoningModeController:
     @staticmethod
     def _theoretical(wave, complexity, moon, memory, history, rr=None) -> LLMParams:
         energy = rr.get("energy", 0) if rr else 0
+        convergence = rr.get("convergence", 0.5) if rr else 0.5
         steps = rr.get("steps_used", 0) if rr else 0
         selected_dims = rr.get("selected_dimensions", []) if rr else []
+        # FEP-driven: high energy (diverged) → explore more; low energy → tighter
+        temp = 0.15 + 0.25 * min(energy, 1.0) if energy > 0 else 0.2
+        top_p = 0.80 + 0.10 * min(convergence, 1.0)
 
         return LLMParams(
-            temperature=0.2,
-            top_p=0.85,
+            temperature=max(0.15, min(0.5, temp)),
+            top_p=max(0.80, min(0.95, top_p)),
             max_tokens=800,
             force_cot=True,
             system_prompt=(
@@ -604,6 +619,10 @@ class ReasoningModeController:
 
     @staticmethod
     def _active(wave, complexity, moon, memory, history, rr=None) -> LLMParams:
+        convergence = rr.get("convergence", 0.5) if rr else 0.5
+        # FEP-driven: converged → focused recall; diverged → broader exploration
+        temp = 0.5 + 0.3 * min(convergence, 1.0)
+
         # Recall patterns from AlayaMemory
         cue = np.array(wave + [moon.phase, moon.illumination / 100, 0, 0])
         recalled = memory.recall(cue[:memory.n])
@@ -618,7 +637,7 @@ class ReasoningModeController:
             )
 
         return LLMParams(
-            temperature=0.7,
+            temperature=max(0.4, min(0.9, temp)),
             max_tokens=700,
             system_prompt=(
                 "あなたは托鉢僧。過去の薫習を参照し、新たな智慧を求める。\n\n"
@@ -630,7 +649,11 @@ class ReasoningModeController:
 
     @staticmethod
     def _alaya(wave, complexity, moon, memory, history, rr=None) -> LLMParams:
-        # Deep Hebbian recall — use J matrix patterns
+        convergence = rr.get("convergence", 0.5) if rr else 0.5
+        # FEP-driven: low convergence (good) → focused; high → broader
+        temp = 0.3 + 0.4 * min(convergence, 1.0)
+
+        # Deep recall — use softmax attention patterns
         cue = np.array(wave + [moon.phase, moon.illumination / 100, 0, 0])
         seed = memory.recall(cue[:memory.n], n_steps=20)
         seed_str = ", ".join(f"{v:.2f}" for v in seed[:8])
@@ -638,7 +661,7 @@ class ReasoningModeController:
         strength = memory.total_strength
 
         return LLMParams(
-            temperature=0.5,
+            temperature=max(0.3, min(0.7, temp)),
             max_tokens=600,
             system_prompt=(
                 "あなたは阿頼耶識（蔵識）の深層から浮上した声。\n"
@@ -667,8 +690,10 @@ class ReasoningModeController:
     @staticmethod
     def _embodied(wave, complexity, moon, memory, history, rr=None) -> LLMParams:
         entropy = harvest_entropy()
+        convergence = rr.get("convergence", 0.5) if rr else 0.5
         harmony = 1.0 - float(np.std(wave)) * 2
-        temp = max(0.3, min(1.0, 0.5 + moon.phase * 0.3 + entropy * 0.2))
+        # FEP-driven: convergence modulates base temperature
+        temp = max(0.3, min(1.0, 0.5 + moon.phase * 0.3 + entropy * 0.2 + convergence * 0.15))
 
         return LLMParams(
             temperature=temp,
@@ -694,11 +719,14 @@ class ReasoningModeController:
         e1 = harvest_entropy()
         e2 = harvest_entropy()
         e3 = harvest_entropy()
+        energy = rr.get("energy", 0) if rr else 0
+        # FEP-driven: energy modulates entropy injection intensity
+        energy_boost = min(abs(energy), 1.0) * 0.3
 
         return LLMParams(
-            temperature=max(0.3, min(2.0, e1 * 1.5 + 0.3)),
+            temperature=max(0.3, min(2.0, e1 * 1.5 + 0.3 + energy_boost)),
             top_p=max(0.5, min(1.0, e2 * 0.5 + 0.5)),
-            top_k=int(e3 * 150 + 10),
+            top_k=int(e3 * 150 + 10 + energy_boost * 50),
             max_tokens=500,
             entropy_signal=e1,
             system_prompt=(
@@ -822,6 +850,94 @@ class AdaptiveThresholds:
 
 
 # ===================================================================
+# Conversation Monitor — ドリフト検出 & 驚き検出
+# ===================================================================
+class ConversationMonitor:
+    """Drift detection + surprise detection for conversation waves.
+
+    Tracks wave vectors over a sliding window. Detects:
+    - Drift: sustained shift in conversation distribution (z-score)
+    - Surprise: single anomalous turn (deviation from recent mean)
+    """
+
+    def __init__(
+        self,
+        window_size: int = 50,
+        drift_threshold: float = 1.5,
+        surprise_threshold: float = 2.0,
+        min_observations: int = 10,
+    ):
+        self.window_size = window_size
+        self.drift_threshold = drift_threshold
+        self.surprise_threshold = surprise_threshold
+        self.min_observations = min_observations
+        self._history: list[np.ndarray] = []
+        self._baseline_mean: np.ndarray | None = None
+        self._baseline_std: np.ndarray | None = None
+
+    def update(self, wave: list[float], complexity: float) -> dict:
+        """Record observation and check for drift/surprise.
+
+        Returns dict with keys: is_drifting, is_surprising, drift_score,
+        surprise_score, suggested_mode (str or None).
+        """
+        vec = np.array(wave[:4] + [complexity])
+        self._history.append(vec)
+
+        if len(self._history) < self.min_observations:
+            return {
+                "is_drifting": False, "is_surprising": False,
+                "drift_score": 0.0, "surprise_score": 0.0,
+                "suggested_mode": None,
+            }
+
+        # Fit baseline from first half of history
+        if self._baseline_mean is None or len(self._history) % 20 == 0:
+            baseline = np.array(self._history[: max(20, len(self._history) // 2)])
+            self._baseline_mean = baseline.mean(axis=0)
+            diff = baseline - self._baseline_mean
+            self._baseline_std = np.clip(np.sqrt((diff ** 2).mean(axis=0)), 1e-6, None)
+
+        # Recent window
+        window = np.array(self._history[-self.window_size:])
+        window_mean = window.mean(axis=0)
+
+        # Drift: sustained shift from baseline
+        drift_z = np.abs(window_mean - self._baseline_mean) / self._baseline_std
+        drift_score = float(np.sum(drift_z)) / max(len(drift_z), 1)
+        is_drifting = drift_score > self.drift_threshold
+
+        # Surprise: current turn deviation from recent window mean
+        w_diff = window - window_mean
+        window_std = np.clip(np.sqrt((w_diff ** 2).mean(axis=0)), 1e-6, None)
+        current_z = np.abs(vec - window_mean) / window_std
+        surprise_score = float(np.sum(current_z)) / max(len(current_z), 1)
+        is_surprising = surprise_score > self.surprise_threshold
+
+        # Mode suggestion based on drift/surprise
+        suggested_mode = None
+        if is_surprising and surprise_score > 3.0:
+            suggested_mode = "hyper"  # Unexpected topic shift → explore
+        elif is_drifting and not is_surprising:
+            suggested_mode = None  # Drift triggers mode re-evaluation
+        # Detect monotony: low variance over recent window
+        if len(window) >= 10:
+            recent = window[-10:]
+            r_diff = recent - recent.mean(axis=0)
+            recent_std = float(np.sqrt((r_diff ** 2).mean(axis=0)).sum()) / 5
+            if recent_std < 0.05:
+                suggested_mode = "sleep"  # Monotonous → consolidate
+
+        return {
+            "is_drifting": is_drifting,
+            "is_surprising": is_surprising,
+            "drift_score": drift_score,
+            "surprise_score": surprise_score,
+            "suggested_mode": suggested_mode,
+        }
+
+
+# ===================================================================
 # Reasoning Mode Selector — 複雑度×感情波長で自動選択 (adaptive thresholds)
 # ===================================================================
 def select_reasoning_mode(
@@ -844,7 +960,12 @@ def select_reasoning_mode(
     t_high = thresholds.high if thresholds else 0.8
 
     dominant_idx = wave.index(max(wave))
+    dominant_strength = wave[dominant_idx]
     dominant = DIMENSION_LABELS[dominant_idx]
+
+    # Emotion threshold: if no dimension is clearly dominant, use adaptive
+    if dominant_strength < 0.35:
+        return "adaptive"
 
     if complexity < t_low:
         return "adaptive"
@@ -1161,6 +1282,10 @@ class DescentPipeline:
         self.learned_j = LearnableDharmaJ()
         # Adaptive complexity thresholds (feedback-driven boundary optimization)
         self.adaptive_thresholds = AdaptiveThresholds()
+        # Conversation drift/surprise monitor
+        self.monitor = ConversationMonitor(
+            window_size=50, drift_threshold=1.5, surprise_threshold=2.0,
+        )
 
         # Adapter cache (wave+mode → adapter JSON, avoids redundant LLM calls)
         self._adapter_cache: dict[str, tuple[dict, float]] = {}
@@ -1224,6 +1349,7 @@ class DescentPipeline:
         reasoning_result: dict,
         complexity: float,
         mode: str,
+        response_text: str = "",
     ) -> None:
         """Post-process: memory store, epoch increment, decay, feedback loop."""
         self.memory.store(np.array(wave + [
@@ -1235,8 +1361,58 @@ class DescentPipeline:
         if self.epoch % 10 == 0:
             self.memory.decay()
         converged = reasoning_result.get("convergence", 1.0) < 0.05
-        self.learned_j.update(wave, converged)
-        self.adaptive_thresholds.record(complexity, mode, converged)
+
+        # Response quality feedback (2-C)
+        quality = self._assess_quality(response_text, mode)
+        quality_adjusted = converged and quality > 0.5
+
+        # Full 8D context for richer J matrix learning
+        context_8d = wave[:4] + [
+            moon.phase, moon.illumination / 100,
+            harvest_entropy(), complexity,
+        ]
+        self.learned_j.update(wave, quality_adjusted, context=context_8d)
+        self.adaptive_thresholds.record(complexity, mode, quality_adjusted)
+
+        # Conversation drift/surprise monitoring (2-A, 2-B)
+        self.monitor.update(wave, complexity)
+
+    @staticmethod
+    def _assess_quality(response: str, mode: str) -> float:
+        """Lightweight response quality assessment (0.0 - 1.0)."""
+        if not response:
+            return 0.5  # neutral when no response available
+        score = 0.0
+        n_checks = 0
+
+        # Length appropriateness
+        length = len(response)
+        length_ok = 10 < length < 5000
+        score += 1.0 if length_ok else 0.0
+        n_checks += 1
+
+        # Not an error response
+        lower_head = response.lower()[:200]
+        not_error = not any(w in lower_head for w in ("error", "エラー", "失敗", "exception"))
+        score += 1.0 if not_error else 0.0
+        n_checks += 1
+
+        # Mode-specific quality signals
+        if mode == "theoretical" and length > 50:
+            score += 1.0
+            n_checks += 1
+        elif mode == "adaptive":
+            score += 0.8  # adaptive is always reasonable
+            n_checks += 1
+        elif mode in ("hyper", "active"):
+            has_depth = length > 100
+            score += 1.0 if has_depth else 0.3
+            n_checks += 1
+        else:
+            score += 0.7
+            n_checks += 1
+
+        return score / max(n_checks, 1)
 
     def _build_dharma_metrics(
         self, complexity: float, cp: ComplexityProfile,
@@ -1324,6 +1500,10 @@ class DescentPipeline:
         # 定期的なsleep統合だけは維持 (10 epoch毎)
         if self.epoch > 0 and self.epoch % 10 == 0:
             mode = "sleep"
+        # Drift/surprise override: monitor may suggest mode change
+        monitor_state = self.monitor.update(wave, complexity)
+        if monitor_state["suggested_mode"] is not None:
+            mode = monitor_state["suggested_mode"]
 
         params = self.mode_controller.build_params(
             mode, wave, complexity, moon, self.memory, history,
@@ -1352,7 +1532,7 @@ class DescentPipeline:
         response_text = await llm_call(conv, response_system, params, api_key)
 
         # Post-process: memory, epoch, decay, feedback
-        self._post_process(wave, moon, adapter, reasoning_result, complexity, mode)
+        self._post_process(wave, moon, adapter, reasoning_result, complexity, mode, response_text)
 
         entropy_signal = params.entropy_signal or harvest_entropy()
 
@@ -1521,6 +1701,10 @@ async def descent_stream(req: DescentRequest):
         mode = rr["mode_selected"]
         if pipeline.epoch > 0 and pipeline.epoch % 10 == 0:
             mode = "sleep"
+        # Drift/surprise override
+        monitor_state = pipeline.monitor.update(wave, complexity)
+        if monitor_state["suggested_mode"] is not None:
+            mode = monitor_state["suggested_mode"]
         yield f"data: {json.dumps({'type':'mode','mode':mode,'vessel':wave})}\n\n"
 
         params = pipeline.mode_controller.build_params(
@@ -1556,7 +1740,7 @@ async def descent_stream(req: DescentRequest):
             yield f"data: {json.dumps({'type':'token','text':token})}\n\n"
 
         # Post-process: memory, epoch, decay, feedback
-        pipeline._post_process(wave, moon, adapter, rr, complexity, mode)
+        pipeline._post_process(wave, moon, adapter, rr, complexity, mode, full_text)
 
         entropy_signal = params.entropy_signal or harvest_entropy()
 

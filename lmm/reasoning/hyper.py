@@ -45,9 +45,20 @@ class HyperReasoner(BaseReasoner):
         h: np.ndarray,
         J: sparse.csr_matrix,
     ) -> tuple[np.ndarray, sparse.csr_matrix, int]:
-        """Inject latent nodes into the problem space."""
+        """Inject latent nodes into the problem space.
+
+        Number of latent nodes adapts to problem complexity:
+        n_latent = base + int(4 * complexity), capped at 2*base.
+        """
         n_orig = len(h)
-        n_total = n_orig + self.n_latent
+        # Adaptive latent count based on h complexity
+        abs_h = np.array([abs(float(x)) for x in h])
+        _mean_h = float(np.sum(abs_h)) / max(len(abs_h), 1)
+        _var_h = float(np.sum((abs_h - _mean_h) ** 2)) / max(len(abs_h), 1)
+        _std_h = float(np.sqrt(_var_h)) if _var_h > 0 else 0.0
+        complexity = _std_h / max(_mean_h, 1e-8)
+        n_latent = max(2, min(self.n_latent * 2, self.n_latent + int(4 * complexity)))
+        n_total = n_orig + n_latent
 
         # Extend h with small priors for latent nodes
         h_ext = np.zeros(n_total)
@@ -64,15 +75,17 @@ class HyperReasoner(BaseReasoner):
             vals.extend(float(v) for v in coo.data)
 
         # Connect latent nodes to top-scoring observed nodes
-        abs_h = np.array([abs(float(x)) for x in h])
-        top_indices = np.argsort(-abs_h)[:min(n_orig, self.n_latent * 3)]
+        top_indices = np.argsort(-abs_h)[:min(n_orig, n_latent * 3)]
 
         rng = np.random.default_rng(42)
-        for lat_idx in range(self.n_latent):
+        for lat_idx in range(n_latent):
             node_id = n_orig + lat_idx
             # Each latent node connects to a subset of top observed nodes
             n_connect = min(len(top_indices), 3)
-            chosen = rng.choice(top_indices, size=n_connect, replace=False)
+            # Energy-weighted connection probability
+            top_h = abs_h[top_indices]
+            probs = top_h / max(float(top_h.sum()), 1e-8)
+            chosen = rng.choice(top_indices, size=n_connect, replace=False, p=probs)
             for obs_idx in chosen:
                 w = self.latent_coupling * rng.uniform(0.5, 1.0)
                 rows.extend([node_id, int(obs_idx)])
@@ -121,7 +134,7 @@ class HyperReasoner(BaseReasoner):
             solver_used="hyper_fep_analog", reasoning_mode="hyper",
             steps_used=steps_used, power_history=power_history,
             diagnostics={
-                "n_latent": self.n_latent,
+                "n_latent": n_total - n_orig,
                 "latent_activations": latent_activations,
             },
         )

@@ -221,6 +221,20 @@ class DharmaReasonerOrchestrator:
                 result = active_result
                 status = "active"
 
+        # Phase 5: De-escalation — if converged at higher level, try simpler
+        if (
+            final_P_err < hyper_convergence_threshold * 0.1
+            and status != mode
+            and "adaptive" in self._reasoners
+        ):
+            # Problem was easier than expected; de-escalate to save compute
+            adaptive_result = self._reasoners["adaptive"].reason(
+                h, J, sila_gamma=sila_gamma, **kwargs,
+            )
+            if adaptive_result.energy <= result.energy * 1.1:
+                result = adaptive_result
+                status = "adaptive"
+
         # Phase 6: Record to AlayaMemory
         converged = (status == mode) or (
             final_P_err < hyper_convergence_threshold
