@@ -16,7 +16,6 @@ import json
 import math
 import os
 import struct
-import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, fields as dc_fields
@@ -37,7 +36,7 @@ from lmm.reasoning.orchestrator import DharmaReasonerOrchestrator
 # FastAPI (lazy import for optional dependency)
 # ---------------------------------------------------------------------------
 try:
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Header
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, StreamingResponse
     from pydantic import BaseModel
@@ -1644,7 +1643,7 @@ async def lifespan(app: FastAPI):
     async def _cleanup_loop():
         while True:
             await asyncio.sleep(60)
-            sessions.cleanup()
+            await sessions.cleanup()
     task = asyncio.create_task(_cleanup_loop())
     yield
     task.cancel()
@@ -1677,25 +1676,23 @@ class SessionManager:
 
     def __init__(self):
         self._sessions: dict[str, tuple[DescentPipeline, float]] = {}
-        self._lock = threading.Lock()
-        self._default = DescentPipeline()
+        self._lock = asyncio.Lock()
 
-    def get(self, session_id: str | None = None) -> DescentPipeline:
-        if not session_id:
-            return self._default
-        with self._lock:
-            if session_id in self._sessions:
-                pipe, _ = self._sessions[session_id]
-                self._sessions[session_id] = (pipe, time.time())
+    async def get(self, session_id: str | None = None) -> DescentPipeline:
+        key = session_id or "__default__"
+        async with self._lock:
+            if key in self._sessions:
+                pipe, _ = self._sessions[key]
+                self._sessions[key] = (pipe, time.time())
                 return pipe
             pipe = DescentPipeline()
-            self._sessions[session_id] = (pipe, time.time())
+            self._sessions[key] = (pipe, time.time())
             return pipe
 
-    def cleanup(self):
+    async def cleanup(self):
         """TTL超過セッションを削除."""
         now = time.time()
-        with self._lock:
+        async with self._lock:
             expired = [
                 sid for sid, (_, ts) in self._sessions.items()
                 if now - ts > SESSION_TTL
@@ -1715,24 +1712,28 @@ class DescentRequest(BaseModel):
     message: str
     history: list[dict] = []
     llm_preference: str = "auto"  # "claude" | "gemini" | "auto"
-    claude_api_key: str = ""
-    gemini_api_key: str = ""
     session_id: str = ""  # セッション別パイプライン
 
 
 @app.post("/api/descent")
-async def descent(req: DescentRequest):
+async def descent(
+    req: DescentRequest,
+    x_claude_api_key: str = Header(default=""),
+    x_gemini_api_key: str = Header(default=""),
+):
     """Main descent pipeline — SENSE → REASON → DESCEND → MANIFEST"""
     api_keys = {}
-    if req.claude_api_key:
-        api_keys["claude"] = req.claude_api_key
-    if req.gemini_api_key:
-        api_keys["gemini"] = req.gemini_api_key
+    claude_key = x_claude_api_key or os.environ.get("CLAUDE_API_KEY", "")
+    gemini_key = x_gemini_api_key or os.environ.get("GEMINI_API_KEY", "")
+    if claude_key:
+        api_keys["claude"] = claude_key
+    if gemini_key:
+        api_keys["gemini"] = gemini_key
 
     if not api_keys:
         return {"error": "At least one API key (claude or gemini) is required"}
 
-    pipeline = sessions.get(req.session_id or None)
+    pipeline = await sessions.get(req.session_id or None)
     result = await pipeline.execute(
         req.message, req.history, api_keys, req.llm_preference,
     )
@@ -1740,18 +1741,24 @@ async def descent(req: DescentRequest):
 
 
 @app.post("/api/descent/stream")
-async def descent_stream(req: DescentRequest):
+async def descent_stream(
+    req: DescentRequest,
+    x_claude_api_key: str = Header(default=""),
+    x_gemini_api_key: str = Header(default=""),
+):
     """Streaming descent pipeline — SSE events for real-time UI."""
     api_keys = {}
-    if req.claude_api_key:
-        api_keys["claude"] = req.claude_api_key
-    if req.gemini_api_key:
-        api_keys["gemini"] = req.gemini_api_key
+    claude_key = x_claude_api_key or os.environ.get("CLAUDE_API_KEY", "")
+    gemini_key = x_gemini_api_key or os.environ.get("GEMINI_API_KEY", "")
+    if claude_key:
+        api_keys["claude"] = claude_key
+    if gemini_key:
+        api_keys["gemini"] = gemini_key
 
     if not api_keys:
         return {"error": "At least one API key (claude or gemini) is required"}
 
-    pipeline = sessions.get(req.session_id or None)
+    pipeline = await sessions.get(req.session_id or None)
 
     async def generate():
         moon = compute_moon_phase()
@@ -1869,7 +1876,7 @@ async def sense(req: dict):
     """Emotional wavelength analysis only."""
     text = req.get("message", "")
     session_id = req.get("session_id", "")
-    pipeline = sessions.get(session_id or None)
+    pipeline = await sessions.get(session_id or None)
     wave = pipeline.vessel.auto_sense(text)
     return {"vessel": wave, "labels": DIMENSION_LABELS}
 
@@ -1877,7 +1884,7 @@ async def sense(req: dict):
 @app.get("/api/status")
 async def status(session_id: str = ""):
     """Current system status."""
-    pipeline = sessions.get(session_id or None)
+    pipeline = await sessions.get(session_id or None)
     moon = compute_moon_phase()
     return {
         "vessel": pipeline.vessel.exist(),
