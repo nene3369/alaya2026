@@ -637,7 +637,7 @@ class TestScalabilitySparse:
         builder.add_cardinality_constraint(k=k, gamma=10.0)
         solver = ClassicalQUBOSolver(builder)
         t0 = time.time()
-        x = solver.solve(method="relaxation", n_restarts=2)
+        solver.solve(method="relaxation", n_restarts=2)
         elapsed = time.time() - t0
         _record("Scalability", "Relaxation sparse (n=200)", elapsed, 60.0)
         assert elapsed < 60.0
