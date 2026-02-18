@@ -18,7 +18,8 @@ import os
 import struct
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from contextlib import asynccontextmanager
+from dataclasses import asdict, dataclass, fields as dc_fields
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +40,6 @@ try:
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, StreamingResponse
-    from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
 except ImportError:
     raise SystemExit(
@@ -799,7 +799,6 @@ class AdaptiveThresholds:
             return
 
         n_bins = 20
-        bins = np.linspace(0, 1, n_bins + 1)
 
         # Count converged/total per bin
         converged_counts = np.zeros(n_bins)
@@ -828,7 +827,6 @@ class AdaptiveThresholds:
                     score = 0.0
                     weight = 0.0
                     for b in range(n_bins):
-                        mid_b = (bins[b] + bins[b + 1]) / 2
                         # Each mode category should have good convergence
                         w = total_counts[b]
                         score += w * rates[b]
@@ -1484,12 +1482,6 @@ class DescentPipeline:
         complexity_profile = compute_complexity(wave_arr)
         complexity = complexity_profile.complexity_score
 
-        # Store in memory
-        pattern = np.array(wave + [
-            moon.phase, moon.illumination / 100, 0, 0,
-        ])
-        self.memory.store(pattern)
-
         # Phase 2: REASON — FEP ODE / QUBOを別スレッドで実行 (2秒タイムアウト)
         reasoning_result = await self.reasoning_engine.run_async(
             wave, moon, complexity, self.memory, timeout=2.0,
@@ -1566,12 +1558,103 @@ class DescentPipeline:
 
 
 # ===================================================================
+# Dharma Text Utilities — _result_to_dict / dharma_auto helpers
+# ===================================================================
+def _result_to_dict(obj: Any) -> Any:
+    """Recursively convert dataclass (and nested structures) to plain dict/list."""
+    if hasattr(obj, "__dataclass_fields__"):
+        return {f.name: _result_to_dict(getattr(obj, f.name)) for f in dc_fields(obj)}
+    elif isinstance(obj, list):
+        return [_result_to_dict(v) for v in obj]
+    elif isinstance(obj, dict):
+        return {k: _result_to_dict(v) for k, v in obj.items()}
+    return obj
+
+
+@dataclass
+class _AutoDharmaResult:
+    engine: str
+    reason: str
+    intent: str
+    result: Any
+
+
+def _text_to_vec(text: str, dim: int = 64) -> np.ndarray:
+    """Convert text to a fixed-size character-frequency vector."""
+    vec = np.zeros(dim, dtype=float)
+    for ch in text:
+        vec[ord(ch) % dim] += 1.0
+    norm = np.linalg.norm(vec)
+    return vec / (norm + 1e-9)
+
+
+def _td_cosmic() -> dict:
+    """Return cosmic dharma parameters derived from current moon phase."""
+    moon = compute_moon_phase()
+    alpha = 0.8 + 0.4 * moon.phase          # [0.8, 1.2]
+    beta  = 0.3 + 0.4 * moon.illumination / 100  # [0.3, 0.7]
+    return {"alpha": round(alpha, 4), "beta": round(beta, 4)}
+
+
+def _td_auto(
+    texts: list[str],
+    *,
+    top_k: int = 5,
+    cosmic_alpha: float = 1.0,
+    cosmic_beta: float = 0.5,
+) -> _AutoDharmaResult:
+    """Auto-select top_k texts using DharmaLMM optimization."""
+    from lmm.dharma.api import DharmaLMM
+
+    n = len(texts)
+    if n == 0:
+        return _AutoDharmaResult(engine="none", reason="empty input", intent="unknown", result=None)
+
+    k = min(top_k, n)
+    vecs = np.array([_text_to_vec(t) for t in texts])
+
+    model = DharmaLMM(k=k, alpha=cosmic_alpha, beta=cosmic_beta)
+    model.fit(vecs)
+    dr = model.select_dharma(vecs)
+
+    selected = [texts[int(i)] for i in dr.selected_indices]
+    intent = "focused" if dr.energy < 0 else "exploratory"
+    reason = f"DharmaLMM submodular (energy={dr.energy:.4f})"
+
+    return _AutoDharmaResult(
+        engine="DharmaLMM",
+        reason=reason,
+        intent=intent,
+        result={"selected": selected, "indices": [int(i) for i in dr.selected_indices]},
+    )
+
+
+class DharmaTextRequest(BaseModel):
+    texts: list[str]
+    top_k: int = 5
+    use_cosmic: bool = False
+
+
+# ===================================================================
 # FastAPI Application
 # ===================================================================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage background tasks for the application lifetime."""
+    async def _cleanup_loop():
+        while True:
+            await asyncio.sleep(60)
+            sessions.cleanup()
+    task = asyncio.create_task(_cleanup_loop())
+    yield
+    task.cancel()
+
+
 app = FastAPI(
     title="Ālaya-Vijñāna v5.0 — 自動降臨サーバー",
     description="推論モード統合 × Claude/Gemini 自動ルーティング",
     version="5.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -1627,16 +1710,6 @@ class SessionManager:
 sessions = SessionManager()
 
 
-# Background cleanup task
-@app.on_event("startup")
-async def start_session_cleanup():
-    async def _cleanup_loop():
-        while True:
-            await asyncio.sleep(60)
-            sessions.cleanup()
-    asyncio.create_task(_cleanup_loop())
-
-
 class DescentRequest(BaseModel):
     message: str
     history: list[dict] = []
@@ -1688,9 +1761,6 @@ async def descent_stream(req: DescentRequest):
         wave_arr = np.array(wave)
         cp = compute_complexity(wave_arr)
         complexity = cp.complexity_score
-
-        pattern = np.array(wave + [moon.phase, moon.illumination / 100, 0, 0])
-        pipeline.memory.store(pattern)
 
         # Phase 2: REASON
         yield f"data: {json.dumps({'type':'phase','phase':'reasoning'})}\n\n"
@@ -1775,6 +1845,21 @@ async def descent_stream(req: DescentRequest):
         yield f"data: {json.dumps(done_payload)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/api/dharma/auto")
+async def dharma_auto(req: "DharmaTextRequest"):
+    """Auto-select best dharma engine based on text characteristics."""
+    cp = _td_cosmic() if req.use_cosmic else {"alpha": 1.0, "beta": 0.5}
+    result = _td_auto(
+        req.texts, top_k=req.top_k,
+        cosmic_alpha=cp["alpha"], cosmic_beta=cp["beta"],
+    )
+    inner = _result_to_dict(result.result) if result.result is not None else None
+    return {
+        "engine": result.engine, "reason": result.reason,
+        "intent": result.intent, "result": inner, "cosmic": cp,
+    }
 
 
 @app.post("/api/sense")
