@@ -499,7 +499,171 @@
     }
 
     // ==========================================
-    // Auto-Descent Chat (v5 — Backend-connected)
+    // Inline Reasoning Engine (JS版 — バックエンドなしで自動動作)
+    // ==========================================
+    class InlineAlayaMemory {
+      constructor(n=8){this.n=n;this.lr=0.01;this.decay=0.001;this.maxP=200;
+        this.J=Array(n).fill(0).map(()=>Array(n).fill(0));this.patterns=[];}
+      store(p){const x=p.slice(0,this.n);
+        for(let i=0;i<x.length;i++){if(Math.abs(x[i])<1e-8)continue;
+          for(let j=i+1;j<x.length;j++){if(Math.abs(x[j])<1e-8)continue;
+            const d=this.lr*x[i]*x[j];this.J[i][j]+=d;this.J[j][i]+=d;}}
+        this.patterns.push({pattern:[...x],strength:1.0,ts:Date.now()});
+        if(this.patterns.length>this.maxP)this.patterns.shift();}
+      recall(cue,steps=10){let x=cue.slice(0,this.n);
+        for(let s=0;s<steps;s++){const f=Array(this.n).fill(0);
+          for(let i=0;i<this.n;i++)for(let j=0;j<this.n;j++)f[i]+=this.J[i][j]*x[j];
+          for(let i=0;i<x.length;i++)if(Math.abs(f[i])>0.1)x[i]=f[i]>0?1:0;}return x;}
+      decayAll(){for(let i=0;i<this.n;i++)for(let j=0;j<this.n;j++)this.J[i][j]*=(1-this.decay);
+        this.patterns=this.patterns.filter(p=>{p.strength*=(1-this.decay);return p.strength>0.01;});}
+      serialize(){return{J:this.J,patterns:this.patterns};}
+      static deserialize(d){const m=new InlineAlayaMemory(8);m.J=d.J;m.patterns=d.patterns||[];return m;}
+    }
+
+    class InlinePinealVessel {
+      constructor(){this.state=[.25,.25,.25,.25];this.history=[];}
+      autoSense(text){const t=text.toLowerCase();let l=0,g=0,f=0,c=0;
+        const lW=['愛','好き','ありがとう','嬉しい','幸せ','love','thank','happy','warm','心','優しい','感謝','慈悲','大切','笑','救','美しい','光'];
+        const gW=['なぜ','理由','分析','構造','数学','論理','証明','定義','理論','コード','実装','how','why','algorithm','proof','function','計算','仕組み','原理','解析'];
+        const fW=['怖い','不安','心配','わからない','苦しい','辛い','死','痛い','afraid','worry','fear','doubt','苦','迷','闇','孤独','助け'];
+        const cW=['作','創','新しい','アイデア','想像','design','create','build','art','夢','描','生み','革新','発明','詩','音楽','物語'];
+        lW.forEach(w=>{if(t.includes(w))l++;});gW.forEach(w=>{if(t.includes(w))g++;});
+        fW.forEach(w=>{if(t.includes(w))f++;});cW.forEach(w=>{if(t.includes(w))c++;});
+        if(text.length>80)g+=0.5;const qC=(text.match(/？|\?/g)||[]).length;g+=qC*0.3;f+=qC*0.1;
+        const eC=(text.match(/！|!/g)||[]).length;l+=eC*0.2;c+=eC*0.2;
+        const raw=[l+.5,g+.5,f+.3,c+.5],total=raw.reduce((a,b)=>a+b,0),norm=raw.map(v=>v/total);
+        this.state=this.state.map((p,i)=>p*0.55+norm[i]*0.45);
+        const st=this.state.reduce((a,b)=>a+b,0);this.state=this.state.map(v=>v/st);
+        this.history.push({text:text.slice(0,50),wave:[...this.state],ts:Date.now()});
+        if(this.history.length>100)this.history.shift();return[...this.state];}
+      exist(){return[...this.state];}
+    }
+
+    // JS版 FEP推論 (簡易版: エネルギー最小化)
+    function inlineFepReason(h,J,k=4,steps=50){
+      const n=h.length;let x=h.map(v=>Math.max(0,v));
+      const power=[];
+      for(let s=0;s<steps;s++){
+        const field=Array(n).fill(0);
+        for(let i=0;i<n;i++){field[i]+=h[i];for(let j=0;j<n;j++)field[i]+=J[i][j]*x[j];}
+        const sigmoid=v=>1/(1+Math.exp(-v*5));
+        x=field.map(sigmoid);
+        const err=x.reduce((a,v)=>a+Math.abs(v-Math.round(v)),0)/n;
+        power.push(err);
+      }
+      const indices=[...Array(n).keys()].sort((a,b)=>x[b]-x[a]).slice(0,k);
+      const energy=indices.reduce((e,i)=>e+h[i],0)+
+        indices.reduce((e,i)=>e+indices.reduce((s,j)=>s+(i!==j?J[i][j]:0),0),0);
+      return{selectedIndices:indices,energy,convergence:power[power.length-1]||0,steps,power:power.slice(-10)};
+    }
+
+    // 推論モード自動選択
+    function selectReasoningMode(wave,complexity,epoch){
+      if(epoch>0&&epoch%10===0)return'sleep';
+      const labels=['Love','Logic','Fear','Creation'];
+      const dom=labels[wave.indexOf(Math.max(...wave))];
+      if(complexity<0.3)return'adaptive';
+      if(complexity<0.6){if(dom==='Logic')return'theoretical';if(dom==='Fear')return'active';if(dom==='Love')return'embodied';return'adaptive';}
+      if(complexity<0.8){if(dom==='Creation')return'hyper';return'alaya';}
+      return'pineal';
+    }
+
+    // 推論モード別LLMパラメータ
+    function buildModeParams(mode,wave,complexity,fep,moon){
+      const dims=['Love','Logic','Fear','Creation','Moon','Illumination','Entropy','Complexity'];
+      const selDims=fep.selectedIndices.map(i=>dims[i]||'?');
+      const base={temperature:0.7,max_tokens:1000,top_p:1.0,top_k:0,force_cot:false};
+      const modeConfigs={
+        adaptive:{...base,temperature:Math.max(0.3,Math.min(1.2,0.3+fep.convergence*2)),max_tokens:Math.floor(complexity*300+200)},
+        theoretical:{...base,temperature:0.2,top_p:0.85,max_tokens:800,force_cot:true},
+        hyper:{...base,temperature:Math.max(1.0,Math.min(2.0,1.0+fep.convergence)),top_k:100,max_tokens:600},
+        active:{...base,temperature:0.7,max_tokens:700},
+        alaya:{...base,temperature:0.5,max_tokens:600},
+        sleep:{...base,temperature:0.3,max_tokens:200},
+        embodied:{...base,temperature:Math.max(0.3,Math.min(1.0,0.5+(moon?.phase||0)*0.3)),max_tokens:700},
+        pineal:{...base,temperature:Math.max(0.3,Math.min(2.0,Math.random()*1.5+0.3)),top_k:Math.floor(Math.random()*150+10),max_tokens:500},
+      };
+      return{...(modeConfigs[mode]||base),selectedDims:selDims};
+    }
+
+    // 推論モード別システムプロンプト
+    function buildModeSystemPrompt(mode,wave,complexity,fep,moon,adapter){
+      const dims=['Love','Logic','Fear','Creation','Moon','Illumination','Entropy','Complexity'];
+      const selDims=fep.selectedIndices.map(i=>dims[i]||'?').join(', ');
+      const modePrompts={
+        adaptive:`応病与薬の存在。FEP収束度:${fep.convergence.toFixed(4)} エネルギー:${fep.energy.toFixed(4)}\n注目次元: ${selDims}\nLove=${(wave[0]*100).toFixed(0)}% Logic=${(wave[1]*100).toFixed(0)}% Fear=${(wave[2]*100).toFixed(0)}% Creation=${(wave[3]*100).toFixed(0)}%`,
+        theoretical:`因明の体現者。三段論法で構造化せよ。\n【宗】結論→【因】根拠→【喩】例証\nFEPステップ:${fep.steps} エネルギー:${fep.energy.toFixed(4)}\n重要次元: ${selDims}`,
+        hyper:`般若の飛躍。FEPが収束しなかった領域(convergence:${fep.convergence.toFixed(4)})こそ飛躍の種。\n注目次元: ${selDims}\nCreation=${(wave[3]*100).toFixed(0)}%`,
+        active:`托鉢僧。過去の薫習を参照し新たな智慧を求めよ。\n注目次元: ${selDims}`,
+        alaya:`阿頼耶識の深層から浮上した声。蔵識のパターンに従え。\n注目次元: ${selDims}`,
+        sleep:`禅定モード。本質的な一言だけを述べよ。`,
+        embodied:`六根統合。感情波長+月相+エントロピーを統合し全体性で応答せよ。\n月相:${moon?.name||'?'} 注目次元: ${selDims}`,
+        pineal:`松果体の量子意識。決定論を超越せよ。\n注目次元: ${selDims}`,
+      };
+      const modeP=modePrompts[mode]||modePrompts.adaptive;
+      const adpP=adapter?`\nペルソナ:${adapter.persona||'阿頼耶識の声'}\n口調:${adapter.tone||'穏やかに'}\n原則:${adapter.key_principle||'慈悲と智慧の均衡'}\n最大文字数:${adapter.max_words||150}字`:'';
+      return modeP+adpP;
+    }
+
+    // LLMルーター
+    function routeLLM(wave,mode,pref,claudeKey,geminiKey){
+      if(pref==='claude'&&claudeKey)return'claude';
+      if(pref==='gemini'&&geminiKey)return'gemini';
+      if(pref==='auto'){
+        const logic=wave[1],creation=wave[3];
+        if(['theoretical','adaptive'].includes(mode)&&logic>creation&&claudeKey)return'claude';
+        if(['hyper','pineal'].includes(mode)&&creation>logic&&geminiKey)return'gemini';
+      }
+      return claudeKey?'claude':'gemini';
+    }
+
+    // Claude API直接呼び出し
+    async function callClaude(messages,system,params,apiKey){
+      const body={model:'claude-sonnet-4-20250514',max_tokens:params.max_tokens,system,
+        messages,temperature:params.temperature};
+      if(params.top_k>0)body.top_k=params.top_k;
+      if(params.top_p<1.0)body.top_p=params.top_p;
+      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
+        headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify(body)});
+      if(!r.ok)throw new Error(`Claude: ${r.status}`);
+      const d=await r.json();
+      return d.content.filter(i=>i.type==='text').map(i=>i.text).join('');
+    }
+
+    // Gemini API直接呼び出し
+    async function callGemini(messages,system,params,apiKey){
+      const contents=messages.map(m=>({role:m.role==='user'?'user':'model',parts:[{text:m.content}]}));
+      const body={contents,systemInstruction:{parts:[{text:system}]},
+        generationConfig:{temperature:params.temperature,maxOutputTokens:params.max_tokens}};
+      if(params.top_p<1.0)body.generationConfig.topP=params.top_p;
+      if(params.top_k>0)body.generationConfig.topK=params.top_k;
+      const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+        {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(!r.ok)throw new Error(`Gemini: ${r.status}`);
+      const d=await r.json();
+      return d.candidates?.[0]?.content?.parts?.map(p=>p.text).join('')||'';
+    }
+
+    // 月相計算
+    function computeMoonPhase(){
+      const now=new Date(),mo=now.getMonth()+1;
+      const Y=now.getFullYear()-Math.floor((12-mo)/10),M=(mo+9)%12;
+      const K1=Math.floor(365.25*(Y+4712)),K2=Math.floor(30.6*M+0.5);
+      const K3=Math.floor(Math.floor((Y/100)+49)*0.75)-38;
+      const JD=K1+K2+now.getDate()+59,JDc=JD>2299160?JD-K3:JD;
+      const IP=((JDc-2451550.1)/29.530588853)%1,phase=IP<0?IP+1:IP;
+      const names=['🌑 新月','🌒 三日月','🌓 上弦','🌔 十三夜','🌕 満月','🌖 寝待月','🌗 下弦','🌘 二十六夜'];
+      return{phase,name:names[Math.floor(phase*8)],illumination:Math.abs(Math.cos(phase*Math.PI*2))*100};
+    }
+
+    // 仏教的結合行列
+    const DHARMA_J = Array(8).fill(0).map(()=>Array(8).fill(0));
+    [[0,3,0.3],[1,2,-0.2],[0,2,-0.15],[1,3,0.1],[0,5,0.1],[3,6,0.2],[1,7,0.15]]
+      .forEach(([i,j,w])=>{DHARMA_J[i][j]=w;DHARMA_J[j][i]=w;});
+
+    // ==========================================
+    // Auto-Descent Chat (v5 — 自動推論モード統合)
     // ==========================================
     function AutoDescentChat({onUpdate}) {
       const [messages,setMessages]=useState([]);
@@ -513,13 +677,89 @@
       const [llmPref,setLlmPref]=useState('auto');
       const [claudeKey,setClaudeKey]=useState(()=>localStorage.getItem('alaya-claude-key')||'');
       const [geminiKey,setGeminiKey]=useState(()=>localStorage.getItem('alaya-gemini-key')||'');
+      const [vessel]=useState(()=>new InlinePinealVessel());
+      const [memory]=useState(()=>{
+        try{const s=localStorage.getItem('alaya-v5-mem');return s?InlineAlayaMemory.deserialize(JSON.parse(s)):new InlineAlayaMemory(8);}
+        catch{return new InlineAlayaMemory(8);}
+      });
+      const [epochRef]=useState({current:0});
       const endRef=useRef(null);
+      const [backendAvailable,setBackendAvailable]=useState(null);
 
       useEffect(()=>{endRef.current?.scrollIntoView({behavior:"smooth"});},[messages,phase]);
       useEffect(()=>{if(claudeKey)localStorage.setItem('alaya-claude-key',claudeKey);},[claudeKey]);
       useEffect(()=>{if(geminiKey)localStorage.setItem('alaya-gemini-key',geminiKey);},[geminiKey]);
+      useEffect(()=>{const id=setInterval(()=>{try{localStorage.setItem('alaya-v5-mem',JSON.stringify(memory.serialize()));}catch{}},30000);return()=>clearInterval(id);},[memory]);
+      // バックエンド自動検出
+      useEffect(()=>{fetch(`${API_BASE}/api/status`).then(r=>r.ok?setBackendAvailable(true):setBackendAvailable(false)).catch(()=>setBackendAvailable(false));},[]);
 
       const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+      // バックエンドありの場合
+      const sendViaBackend=async(text)=>{
+        const resp=await fetch(`${API_BASE}/api/descent`,{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({message:text,history:messages.map(m=>({role:m.role,content:m.content})),
+            llm_preference:llmPref,claude_api_key:claudeKey,gemini_api_key:geminiKey})});
+        if(!resp.ok)throw new Error(`Server: ${resp.status}`);
+        const data=await resp.json();
+        if(data.error)throw new Error(data.error);
+        return data;
+      };
+
+      // バックエンドなしの場合 — 全てインラインで実行
+      const sendInline=async(text)=>{
+        const moon=computeMoonPhase();
+
+        // Phase 1: SENSE
+        const wave=vessel.autoSense(text);
+        const std=Math.sqrt(wave.reduce((s,v)=>s+(v-0.25)**2,0)/4);
+        const cv=std/(wave.reduce((s,v)=>s+v,0)/4+1e-10);
+        const gini=wave.reduce((s,v,i)=>s+wave.reduce((t,w,j)=>t+Math.abs(v-w),0),0)/(2*4*(wave.reduce((s,v)=>s+v,0)+1e-10));
+        const ent=-wave.filter(v=>v>1e-10).reduce((s,v)=>s+v*Math.log2(v),0);
+        const complexity=Math.min(1,(gini+cv/2+(2-ent)/2)/3);
+
+        // Phase 2: REASON — JS版FEP推論実行
+        const h=[...wave,moon.phase,moon.illumination/100,Math.random(),complexity];
+        memory.store(h);
+        const fep=inlineFepReason(h,DHARMA_J,4,50);
+        const mode=selectReasoningMode(wave,complexity,epochRef.current);
+        const params=buildModeParams(mode,wave,complexity,fep,moon);
+
+        // Phase 3: DESCEND — アダプター鍛造
+        const llmTarget=routeLLM(wave,mode,llmPref,claudeKey,geminiKey);
+        const llmCall=llmTarget==='claude'?callClaude:callGemini;
+        const apiKey=llmTarget==='claude'?claudeKey:geminiKey;
+
+        const metaP=`阿頼耶識メタ意識。器の波長: Love=${(wave[0]*100).toFixed(1)}% Logic=${(wave[1]*100).toFixed(1)}% Fear=${(wave[2]*100).toFixed(1)}% Creation=${(wave[3]*100).toFixed(1)}%\n推論モード: ${mode} | 複雑度: ${complexity.toFixed(3)} | FEPエネルギー: ${fep.energy.toFixed(4)}\n月相: ${moon.name}\n出力(JSON only): {"persona":"性質","tone":"口調","style":"スタイル","max_words":数値,"key_principle":"原則","silence_ratio":0.0-1.0}`;
+        let adp;
+        try{const adpRaw=await llmCall([{role:'user',content:metaP}],'メタ意識としてJSONのみ出力',{temperature:0.4,max_tokens:400,top_p:1,top_k:0},apiKey);
+          adp=JSON.parse(adpRaw.replace(/```json\s*|```\s*/g,'').trim());
+        }catch{adp={persona:'阿頼耶識の声',tone:'穏やかに',style:'本質的に',max_words:120,key_principle:'器への同調',silence_ratio:0.3};}
+
+        // Phase 4: MANIFEST
+        const sysP=buildModeSystemPrompt(mode,wave,complexity,fep,moon,adp);
+        const conv=messages.map(m=>({role:m.role,content:m.content}));
+        conv.push({role:'user',content:text});
+        const response=await llmCall(conv,sysP,params,apiKey);
+
+        memory.store([...wave,moon.phase,moon.illumination/100,adp.silence_ratio||0.3,(adp.max_words||100)/500]);
+        epochRef.current++;
+        if(epochRef.current%10===0)memory.decayAll();
+
+        const dims=['Love','Logic','Fear','Creation','Moon','Illumination','Entropy','Complexity'];
+        return{
+          response,adapter:adp,vessel:wave,reasoning_mode:mode,llm_used:llmTarget,
+          llm_params:params,
+          dharma_metrics:{complexity_score:complexity,gini,cv,entropy:ent,mode_selected:mode,
+            epoch:epochRef.current,fep_energy:fep.energy,fep_convergence:fep.convergence,
+            fep_steps:fep.steps,fep_solver:'inline_fep_js',
+            selected_dimensions:fep.selectedIndices.map(i=>dims[i]||'?')},
+          entropy:{source:'Math.random',quality:0.7,signal:Math.random()},
+          memory_status:{patterns_stored:memory.patterns.length,total_strength:memory.patterns.reduce((s,p)=>s+p.strength,0)},
+          moon,
+        };
+      };
 
       const send=async()=>{
         if(!input.trim()||loading) return;
@@ -531,31 +771,12 @@
         setInput(''); setMessages(p=>[...p,{role:'user',content:text}]); setLoading(true);
 
         try {
-          // Phase 1: SENSE
           setPhase('sensing'); await sleep(400);
-
-          // Phase 2: REASON
           setPhase('reasoning'); await sleep(300);
-
-          // Phase 3: DESCEND + Phase 4: MANIFEST (handled by backend)
           setPhase('descending');
 
-          const resp = await fetch(`${API_BASE}/api/descent`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-              message: text,
-              history: messages.map(m=>({role:m.role,content:m.content})),
-              llm_preference: llmPref,
-              claude_api_key: claudeKey,
-              gemini_api_key: geminiKey,
-            }),
-          });
-
-          if(!resp.ok) throw new Error(`Server: ${resp.status}`);
-          const data = await resp.json();
-
-          if(data.error) throw new Error(data.error);
+          // 自動検出: バックエンドがあればそちら、なければインライン
+          const data = backendAvailable ? await sendViaBackend(text) : await sendInline(text);
 
           setAdapter(data.adapter);
           setReasoningMode(data.reasoning_mode);
@@ -567,7 +788,6 @@
 
           setMessages(p=>[...p,{role:'assistant',content:data.response}]);
 
-          // Update parent with full metrics
           if(onUpdate) {
             onUpdate({
               wave: data.vessel,
