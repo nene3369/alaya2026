@@ -941,10 +941,11 @@ class DescentPipeline:
         reasoning_result = await self.reasoning_engine.run_async(
             wave, moon, complexity, self.memory, timeout=2.0,
         )
-        # オーケストレーターが選択したモードを使用
+        # オーケストレーターが選択したモードを使用 (FEP推論結果を直接採用)
         mode = reasoning_result["mode_selected"]
-        # 感情波長に基づくフォールバックモード選択 (オーケストレーターの結果を拡張)
-        mode = select_reasoning_mode(wave, complexity, self.epoch)
+        # 定期的なsleep統合だけは維持 (10 epoch毎)
+        if self.epoch > 0 and self.epoch % 10 == 0:
+            mode = "sleep"
 
         params = self.mode_controller.build_params(
             mode, wave, complexity, moon, self.memory, history,
@@ -1203,7 +1204,9 @@ async def descent_stream(req: DescentRequest):
         rr = await pipeline.reasoning_engine.run_async(
             wave, moon, complexity, pipeline.memory, timeout=2.0,
         )
-        mode = select_reasoning_mode(wave, complexity, pipeline.epoch)
+        mode = rr["mode_selected"]
+        if pipeline.epoch > 0 and pipeline.epoch % 10 == 0:
+            mode = "sleep"
         yield f"data: {json.dumps({'type':'mode','mode':mode,'vessel':wave})}\n\n"
 
         params = pipeline.mode_controller.build_params(
