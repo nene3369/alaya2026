@@ -231,9 +231,12 @@ class SanghaOrchestrator:
         print(result.final)   # "APPROVED"
     """
 
-    def __init__(self) -> None:
+    DEFAULT_TIMEOUT: float = 5.0  # per-disciple timeout in seconds
+
+    def __init__(self, timeout: float | None = None) -> None:
         self.patthana_engine = PatthanaEngine()
         self.vow_engine = VowConstraintEngine()
+        self.timeout = timeout if timeout is not None else self.DEFAULT_TIMEOUT
         self.disciples: List[DiscipleAgent] = [
             Sariputra(self.patthana_engine),
             Upali(),
@@ -244,14 +247,31 @@ class SanghaOrchestrator:
             Purna(self.vow_engine),
         ]
 
+    async def _contemplate_with_timeout(
+        self, disciple: DiscipleAgent, context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Run a single disciple's contemplate with timeout protection."""
+        try:
+            return await asyncio.wait_for(
+                disciple.contemplate(context), timeout=self.timeout,
+            )
+        except asyncio.TimeoutError:
+            return {
+                "agent": disciple.name,
+                "insight": f"{disciple.name} timed out after {self.timeout}s.",
+                "verdict": "TIMEOUT",
+            }
+
     async def hold_council(self, context: Dict[str, Any]) -> CouncilResult:
         """Convene the full council and return a deliberated verdict.
 
         All seven disciples contemplate the context concurrently.  Upali's
         veto is checked first; if triggered the council immediately returns
-        ``REJECTED``.
+        ``REJECTED``.  Each disciple has a per-task timeout to prevent hangs.
         """
-        results = await asyncio.gather(*[d.contemplate(context) for d in self.disciples])
+        results = await asyncio.gather(
+            *[self._contemplate_with_timeout(d, context) for d in self.disciples],
+        )
 
         # Upali's veto is absolute
         for res in results:
@@ -269,5 +289,19 @@ class SanghaOrchestrator:
         )
 
     def hold_council_sync(self, context: Dict[str, Any]) -> CouncilResult:
-        """Synchronous wrapper around :meth:`hold_council`."""
+        """Synchronous wrapper around :meth:`hold_council`.
+
+        Safe to call from contexts where an event loop may already be running.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None and loop.is_running():
+            # Already inside an async context — run in a new thread
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, self.hold_council(context))
+                return future.result(timeout=self.timeout * 2)
         return asyncio.run(self.hold_council(context))
