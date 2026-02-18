@@ -31,6 +31,9 @@ from lmm.reasoning.adaptive import AdaptiveReasoner
 from lmm.reasoning.theoretical import TheoreticalReasoner
 from lmm.reasoning.pineal import PinealGland
 from lmm.reasoning.orchestrator import DharmaReasonerOrchestrator
+from lmm.reasoning.heartbeat import HeartbeatDaemon
+from lmm.reasoning.sleep import SleepConsolidation
+from lmm.reasoning.context_bridge import AlayaContextBridge
 
 # ---------------------------------------------------------------------------
 # FastAPI (lazy import for optional dependency)
@@ -872,13 +875,18 @@ class ConversationMonitor:
         self._baseline_mean: np.ndarray | None = None
         self._baseline_std: np.ndarray | None = None
 
-    def update(self, wave: list[float], complexity: float) -> dict:
+    def update(
+        self,
+        wave: list[float],
+        complexity: float,
+        heartbeat_cv: float = 0.0,
+    ) -> dict:
         """Record observation and check for drift/surprise.
 
         Returns dict with keys: is_drifting, is_surprising, drift_score,
         surprise_score, suggested_mode (str or None).
         """
-        vec = np.array(wave[:4] + [complexity])
+        vec = np.array(wave[:4] + [complexity, heartbeat_cv])
         self._history.append(vec)
 
         if len(self._history) < self.min_observations:
@@ -1259,6 +1267,7 @@ class DescentResult:
     entropy: dict
     memory_status: dict
     moon: dict
+    heartbeat: dict | None = None
 
 
 class DescentPipeline:
@@ -1282,6 +1291,25 @@ class DescentPipeline:
         # Conversation drift/surprise monitor
         self.monitor = ConversationMonitor(
             window_size=50, drift_threshold=1.5, surprise_threshold=2.0,
+        )
+
+        # Heartbeat daemon: continuous-time FEP state evolution
+        self.heartbeat = HeartbeatDaemon(
+            n_dims=4, dt=0.1, r_leak=10.0,
+            entropy_scale=0.01, target_cv=0.5,
+            idle_sleep_threshold=60.0,
+        )
+        # Attach sleep consolidation for idle-triggered memory maintenance
+        self._sleep = SleepConsolidation(
+            self.memory, nrem_replay_cycles=2,
+            rem_noise_scale=0.05, pruning_threshold=0.1,
+        )
+        self.heartbeat.attach_sleep(self._sleep)
+        self._heartbeat_task: asyncio.Task | None = None
+
+        # Alaya context bridge: memory-driven conversation history selection
+        self.context_bridge = AlayaContextBridge(
+            self.memory, max_context_messages=20, recency_count=3,
         )
 
         # Adapter cache (wave+mode → adapter JSON, avoids redundant LLM calls)
@@ -1331,10 +1359,19 @@ class DescentPipeline:
 
     def _prepare_conversation(
         self, history: list[dict], message: str,
+        current_wave: np.ndarray | None = None,
     ) -> list[dict]:
-        """Prepare conversation with history limited to last 20 messages."""
-        recent = history[-20:] if len(history) > 20 else history
-        conv = [{"role": m["role"], "content": m["content"]} for m in recent]
+        """Prepare conversation with Alaya memory-driven context selection.
+
+        Uses AlayaContextBridge to select relevant history messages
+        when memory patterns are available; falls back to recency-based
+        truncation otherwise.
+        """
+        if current_wave is not None and self.memory.n_patterns > 0:
+            selected = self.context_bridge.select_context(history, current_wave)
+        else:
+            selected = history[-20:] if len(history) > 20 else history
+        conv = [{"role": m["role"], "content": m["content"]} for m in selected]
         conv.append({"role": "user", "content": message})
         return conv
 
@@ -1476,6 +1513,9 @@ class DescentPipeline:
         # Phase 1: SENSE
         wave = self.vessel.auto_sense(message)
 
+        # Inject sensory input into heartbeat (continuous-time state update)
+        self.heartbeat.inject_sensory(np.array(wave[:4]))
+
         # Compute complexity using lmm library's compute_complexity
         wave_arr = np.array(wave)
         complexity_profile = compute_complexity(wave_arr)
@@ -1492,7 +1532,7 @@ class DescentPipeline:
         if self.epoch > 0 and self.epoch % 10 == 0:
             mode = "sleep"
         # Drift/surprise override: monitor may suggest mode change
-        monitor_state = self.monitor.update(wave, complexity)
+        monitor_state = self.monitor.update(wave, complexity, self.heartbeat.cv)
         if monitor_state["suggested_mode"] is not None:
             mode = monitor_state["suggested_mode"]
 
@@ -1500,6 +1540,10 @@ class DescentPipeline:
             mode, wave, complexity, moon, self.memory, history,
             reasoning_result=reasoning_result,
         )
+
+        # Heartbeat weight modulation: karuna → temperature, metta → top_p
+        params.temperature = min(2.0, params.temperature * self.heartbeat.karuna_weight)
+        params.top_p = min(1.0, params.top_p * self.heartbeat.metta_weight)
 
         # Phase 3: DESCEND — forge adapter + route LLM
         llm_target = self.router.route(wave, mode, llm_preference)
@@ -1518,7 +1562,7 @@ class DescentPipeline:
 
         # Phase 4: MANIFEST — generate response with mode-controlled params
         response_system = self._build_response_system(params, adapter)
-        conv = self._prepare_conversation(history, message)
+        conv = self._prepare_conversation(history, message, current_wave=wave_arr)
 
         response_text = await llm_call(conv, response_system, params, api_key)
 
@@ -1527,6 +1571,7 @@ class DescentPipeline:
 
         entropy_signal = params.entropy_signal or harvest_entropy()
 
+        hb_snap = self.heartbeat.snapshot()
         return DescentResult(
             response=response_text,
             adapter=adapter,
@@ -1553,6 +1598,15 @@ class DescentPipeline:
                 "total_strength": self.memory.total_strength,
             },
             moon=asdict(moon),
+            heartbeat={
+                "v_state": hb_snap.v_state,
+                "karuna_weight": hb_snap.karuna_weight,
+                "metta_weight": hb_snap.metta_weight,
+                "tick_count": hb_snap.tick_count,
+                "idle_seconds": hb_snap.idle_seconds,
+                "cv": hb_snap.cv,
+                "last_sleep_report": hb_snap.last_sleep_report,
+            },
         )
 
 
@@ -1686,11 +1740,13 @@ class SessionManager:
                 self._sessions[key] = (pipe, time.time())
                 return pipe
             pipe = DescentPipeline()
+            # Start heartbeat daemon for this session
+            pipe._heartbeat_task = asyncio.create_task(pipe.heartbeat.run())
             self._sessions[key] = (pipe, time.time())
             return pipe
 
     async def cleanup(self):
-        """TTL超過セッションを削除."""
+        """TTL超過セッションを削除. Stop heartbeat daemons for expired sessions."""
         now = time.time()
         async with self._lock:
             expired = [
@@ -1698,6 +1754,10 @@ class SessionManager:
                 if now - ts > SESSION_TTL
             ]
             for sid in expired:
+                pipe, _ = self._sessions[sid]
+                pipe.heartbeat.stop()
+                if pipe._heartbeat_task is not None:
+                    pipe._heartbeat_task.cancel()
                 del self._sessions[sid]
 
     @property
@@ -1886,6 +1946,7 @@ async def status(session_id: str = ""):
     """Current system status."""
     pipeline = await sessions.get(session_id or None)
     moon = compute_moon_phase()
+    hb = pipeline.heartbeat.snapshot()
     return {
         "vessel": pipeline.vessel.exist(),
         "moon": asdict(moon),
@@ -1899,6 +1960,15 @@ async def status(session_id: str = ""):
             "alaya", "sleep", "embodied", "pineal",
         ],
         "active_sessions": sessions.active_sessions,
+        "heartbeat": {
+            "v_state": hb.v_state,
+            "karuna_weight": hb.karuna_weight,
+            "metta_weight": hb.metta_weight,
+            "tick_count": hb.tick_count,
+            "idle_seconds": hb.idle_seconds,
+            "cv": hb.cv,
+            "last_sleep_report": hb.last_sleep_report,
+        },
     }
 
 
