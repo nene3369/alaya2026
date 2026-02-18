@@ -190,6 +190,24 @@
     const API_BASE = window.location.origin;
 
     // ==========================================
+    // Tuning Constants
+    // ==========================================
+    const CANVAS_MAX_WIDTH = 860;
+    const CANVAS_MAX_HEIGHT = 200;
+    const CANVAS_ASPECT = 0.3;
+    const IDLE_FRAME_INTERVAL = 100;      // ~10fps when idle
+    const ACTIVE_FRAME_INTERVAL = 16;     // ~60fps when active
+    const MEMORY_DIMENSIONS = 8;
+    const MEMORY_LEARNING_RATE = 0.01;
+    const MEMORY_DECAY_RATE = 0.001;
+    const MEMORY_MAX_PATTERNS = 200;
+    const MEMORY_DECAY_EPOCH_INTERVAL = 10;
+    const FEP_DEFAULT_K = 4;
+    const FEP_DEFAULT_STEPS = 50;
+    const FEP_WORKER_TIMEOUT_MS = 2000;   // WebWorker timeout (raised from 500)
+    const CONVERSATION_HISTORY_LIMIT = 20;
+
+    // ==========================================
     // Descent Loss Animation
     // ==========================================
     function LossBar() {
@@ -345,7 +363,7 @@
         let W,H;
         const resize=()=>{
           const rect=c.parentElement.getBoundingClientRect();
-          W=Math.min(rect.width,860); H=Math.min(200,W*0.3);
+          W=Math.min(rect.width,CANVAS_MAX_WIDTH); H=Math.min(CANVAS_MAX_HEIGHT,W*CANVAS_ASPECT);
           const dpr=window.devicePixelRatio||1;
           c.width=W*dpr;c.height=H*dpr;c.style.width=W+"px";c.style.height=H+"px";
           ctx.setTransform(dpr,0,0,dpr,0,0);
@@ -356,7 +374,7 @@
         const draw=(now)=>{
           // idle時は10fps、アクティブ時は60fps
           const ph=phaseRef.current;
-          const interval=ph==='idle'?100:16;
+          const interval=ph==='idle'?IDLE_FRAME_INTERVAL:ACTIVE_FRAME_INTERVAL;
           if(now-lastDrawRef.current<interval){animRef.current=requestAnimationFrame(draw);return;}
           lastDrawRef.current=now;
 
@@ -509,7 +527,8 @@
     // Inline Reasoning Engine (JS版 — バックエンドなしで自動動作)
     // ==========================================
     class InlineAlayaMemory {
-      constructor(n=8){this.n=n;this.lr=0.01;this.decay=0.001;this.maxP=200;
+      constructor(n=MEMORY_DIMENSIONS,opts={}){this.n=n;
+        this.lr=opts.lr??MEMORY_LEARNING_RATE;this.decay=opts.decay??MEMORY_DECAY_RATE;this.maxP=opts.maxP??MEMORY_MAX_PATTERNS;
         this.J=Array(n).fill(0).map(()=>Array(n).fill(0));this.patterns=[];}
       store(p){const x=p.slice(0,this.n);
         for(let i=0;i<x.length;i++){if(Math.abs(x[i])<1e-8)continue;
@@ -524,7 +543,7 @@
       decayAll(){for(let i=0;i<this.n;i++)for(let j=0;j<this.n;j++)this.J[i][j]*=(1-this.decay);
         this.patterns=this.patterns.filter(p=>{p.strength*=(1-this.decay);return p.strength>0.01;});}
       serialize(){return{J:this.J,patterns:this.patterns};}
-      static deserialize(d){const m=new InlineAlayaMemory(8);m.J=d.J;m.patterns=d.patterns||[];return m;}
+      static deserialize(d){const m=new InlineAlayaMemory(MEMORY_DIMENSIONS);m.J=d.J;m.patterns=d.patterns||[];return m;}
     }
 
     class InlinePinealVessel {
@@ -624,6 +643,51 @@
       return claudeKey?'claude':'gemini';
     }
 
+    // ==========================================
+    // Pipeline Phase Functions (sendInline decomposition)
+    // ==========================================
+    function phaseSense(vessel, text) {
+      const wave = vessel.autoSense(text);
+      const mean = wave.reduce((s, v) => s + v, 0) / 4;
+      const std = Math.sqrt(wave.reduce((s, v) => s + (v - 0.25) ** 2, 0) / 4);
+      const cv = std / (mean + 1e-10);
+      const gini = wave.reduce((s, v) =>
+        s + wave.reduce((t, w) => t + Math.abs(v - w), 0), 0
+      ) / (2 * 4 * (wave.reduce((s, v) => s + v, 0) + 1e-10));
+      const entropy = -wave.filter(v => v > 1e-10).reduce((s, v) => s + v * Math.log2(v), 0);
+      const complexity = Math.min(1, (gini + cv / 2 + (2 - entropy) / 2) / 3);
+      return { wave, gini, cv, entropy, complexity };
+    }
+
+    async function phaseReason(wave, complexity, moon, memory, epoch) {
+      const h = [...wave, moon.phase, moon.illumination / 100, Math.random(), complexity];
+      memory.store(h);
+      const fep = await runFepAsync(h, DHARMA_J, FEP_DEFAULT_K, FEP_DEFAULT_STEPS);
+      const mode = selectReasoningMode(wave, complexity, epoch);
+      const params = buildModeParams(mode, wave, complexity, fep, moon);
+      return { h, fep, mode, params };
+    }
+
+    async function phaseDescend(wave, mode, llmPref, claudeKey, geminiKey, complexity, fep, moon) {
+      const llmTarget = routeLLM(wave, mode, llmPref, claudeKey, geminiKey);
+      const apiKey = llmTarget === 'claude' ? claudeKey : geminiKey;
+      const aCacheKey = adapterCacheKey(wave, mode);
+      let adp = getCachedAdapter(aCacheKey);
+      if (!adp) {
+        const forgeCall = geminiKey ? callGemini : (llmTarget === 'claude' ? callClaude : callGemini);
+        const forgeKey = geminiKey || apiKey;
+        const metaP = `阿頼耶識メタ意識。器の波長: Love=${(wave[0]*100).toFixed(1)}% Logic=${(wave[1]*100).toFixed(1)}% Fear=${(wave[2]*100).toFixed(1)}% Creation=${(wave[3]*100).toFixed(1)}%\n推論モード: ${mode} | 複雑度: ${complexity.toFixed(3)} | FEPエネルギー: ${fep.energy.toFixed(4)}\n月相: ${moon.name}\n出力(JSON only): {"persona":"性質","tone":"口調","style":"スタイル","max_words":数値,"key_principle":"原則","silence_ratio":0.0-1.0}`;
+        try {
+          const adpRaw = await forgeCall([{role:'user',content:metaP}], 'メタ意識としてJSONのみ出力', {temperature:0.4,max_tokens:400,top_p:1,top_k:0}, forgeKey);
+          adp = JSON.parse(adpRaw.replace(/```json\s*|```\s*/g, '').trim());
+        } catch {
+          adp = {persona:'阿頼耶識の声',tone:'穏やかに',style:'本質的に',max_words:120,key_principle:'器への同調',silence_ratio:0.3};
+        }
+        cacheAdapter(aCacheKey, adp);
+      }
+      return { llmTarget, apiKey, adp };
+    }
+
     // 指数バックオフリトライ (ネットワークエラーのみ、最大3回: 1s, 2s, 4s)
     async function fetchWithRetry(url,opts,maxRetries=3){
       let lastErr;
@@ -720,7 +784,9 @@
             const ev = JSON.parse(raw);
             if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta')
               yield ev.delta.text;
-          } catch {}
+          } catch (e) {
+            if (raw.trim()) console.warn('[Claude stream] parse:', raw.slice(0, 120), e.message);
+          }
         }
       }
     }
@@ -751,7 +817,10 @@
             for (const c of (ev.candidates || []))
               for (const p of (c.content?.parts || []))
                 if (p.text) yield p.text;
-          } catch {}
+          } catch (e) {
+            const raw = line.slice(6);
+            if (raw.trim()) console.warn('[Gemini stream] parse:', raw.slice(0, 120), e.message);
+          }
         }
       }
     }
@@ -783,11 +852,11 @@
       fepWorkerUrl = URL.createObjectURL(blob);
     } catch (e) { /* WebWorker unavailable */ }
 
-    function runFepAsync(h, J, k = 4, steps = 50) {
+    function runFepAsync(h, J, k = FEP_DEFAULT_K, steps = FEP_DEFAULT_STEPS) {
       if (!fepWorkerUrl) return Promise.resolve(inlineFepReason(h, J, k, steps));
       return new Promise((resolve) => {
         const w = new Worker(fepWorkerUrl);
-        const timer = setTimeout(() => { w.terminate(); resolve(inlineFepReason(h, J, k, steps)); }, 500);
+        const timer = setTimeout(() => { w.terminate(); resolve(inlineFepReason(h, J, k, steps)); }, FEP_WORKER_TIMEOUT_MS);
         w.onmessage = (e) => { clearTimeout(timer); w.terminate(); resolve(e.data); };
         w.onerror = () => { clearTimeout(timer); w.terminate(); resolve(inlineFepReason(h, J, k, steps)); };
         w.postMessage({ h, J, k, steps });
@@ -828,8 +897,8 @@
       const [geminiKey,setGeminiKey]=useState(()=>localStorage.getItem('alaya-gemini-key')||'');
       const [vessel]=useState(()=>new InlinePinealVessel());
       const [memory]=useState(()=>{
-        try{const s=localStorage.getItem('alaya-v5-mem');return s?InlineAlayaMemory.deserialize(JSON.parse(s)):new InlineAlayaMemory(8);}
-        catch{return new InlineAlayaMemory(8);}
+        try{const s=localStorage.getItem('alaya-v5-mem');return s?InlineAlayaMemory.deserialize(JSON.parse(s)):new InlineAlayaMemory();}
+        catch{return new InlineAlayaMemory();}
       });
       const [epochRef]=useState({current:0});
       const endRef=useRef(null);
@@ -892,67 +961,47 @@
       };
 
       // バックエンドなしの場合 — 全てインラインで実行 (adapter cache + WebWorker + streaming)
-      const sendInline=async(text,onToken)=>{
-        const moon=computeMoonPhase();
+      const sendInline = async (text, onToken) => {
+        const moon = computeMoonPhase();
 
-        // Phase 1: SENSE
-        const wave=vessel.autoSense(text);
-        const std=Math.sqrt(wave.reduce((s,v)=>s+(v-0.25)**2,0)/4);
-        const cv=std/(wave.reduce((s,v)=>s+v,0)/4+1e-10);
-        const gini=wave.reduce((s,v,i)=>s+wave.reduce((t,w,j)=>t+Math.abs(v-w),0),0)/(2*4*(wave.reduce((s,v)=>s+v,0)+1e-10));
-        const ent=-wave.filter(v=>v>1e-10).reduce((s,v)=>s+v*Math.log2(v),0);
-        const complexity=Math.min(1,(gini+cv/2+(2-ent)/2)/3);
-
-        // Phase 2: REASON — WebWorker FEP推論 (UIスレッドをブロックしない)
-        const h=[...wave,moon.phase,moon.illumination/100,Math.random(),complexity];
-        memory.store(h);
-        const fep=await runFepAsync(h,DHARMA_J,4,50);
-        const mode=selectReasoningMode(wave,complexity,epochRef.current);
-        const params=buildModeParams(mode,wave,complexity,fep,moon);
-
-        // Phase 3: DESCEND — アダプター (キャッシュ優先 + Gemini Flash鍛造)
-        const llmTarget=routeLLM(wave,mode,llmPref,claudeKey,geminiKey);
-        const apiKey=llmTarget==='claude'?claudeKey:geminiKey;
-
-        const aCacheKey=adapterCacheKey(wave,mode);
-        let adp=getCachedAdapter(aCacheKey);
-        if(!adp){
-          // Gemini Flash for adapter forging if available (fast+cheap)
-          const forgeCall=geminiKey?callGemini:(llmTarget==='claude'?callClaude:callGemini);
-          const forgeKey=geminiKey||apiKey;
-          const metaP=`阿頼耶識メタ意識。器の波長: Love=${(wave[0]*100).toFixed(1)}% Logic=${(wave[1]*100).toFixed(1)}% Fear=${(wave[2]*100).toFixed(1)}% Creation=${(wave[3]*100).toFixed(1)}%\n推論モード: ${mode} | 複雑度: ${complexity.toFixed(3)} | FEPエネルギー: ${fep.energy.toFixed(4)}\n月相: ${moon.name}\n出力(JSON only): {"persona":"性質","tone":"口調","style":"スタイル","max_words":数値,"key_principle":"原則","silence_ratio":0.0-1.0}`;
-          try{const adpRaw=await forgeCall([{role:'user',content:metaP}],'メタ意識としてJSONのみ出力',{temperature:0.4,max_tokens:400,top_p:1,top_k:0},forgeKey);
-            adp=JSON.parse(adpRaw.replace(/```json\s*|```\s*/g,'').trim());
-          }catch{adp={persona:'阿頼耶識の声',tone:'穏やかに',style:'本質的に',max_words:120,key_principle:'器への同調',silence_ratio:0.3};}
-          cacheAdapter(aCacheKey,adp);
-        }
+        // Phase 1-3: SENSE → REASON → DESCEND
+        const sense = phaseSense(vessel, text);
+        const reason = await phaseReason(sense.wave, sense.complexity, moon, memory, epochRef.current);
+        const descent = await phaseDescend(
+          sense.wave, reason.mode, llmPref, claudeKey, geminiKey,
+          sense.complexity, reason.fep, moon,
+        );
 
         // Phase 4: MANIFEST (streaming)
-        const sysP=buildModeSystemPrompt(mode,wave,complexity,fep,moon,adp);
-        const conv=messages.slice(-20).map(m=>({role:m.role,content:m.content}));
-        conv.push({role:'user',content:text});
+        const sysP = buildModeSystemPrompt(reason.mode, sense.wave, sense.complexity, reason.fep, moon, descent.adp);
+        const conv = messages.slice(-CONVERSATION_HISTORY_LIMIT).map(m => ({role:m.role, content:m.content}));
+        conv.push({role:'user', content:text});
 
-        let response='';
-        const streamFn=llmTarget==='claude'?callClaudeStream:callGeminiStream;
-        for await(const token of streamFn(conv,sysP,params,apiKey)){
-          response+=token;
-          if(onToken)onToken(token);
+        let response = '';
+        const streamFn = descent.llmTarget === 'claude' ? callClaudeStream : callGeminiStream;
+        for await (const token of streamFn(conv, sysP, reason.params, descent.apiKey)) {
+          response += token;
+          if (onToken) onToken(token);
         }
 
-        memory.store([...wave,moon.phase,moon.illumination/100,adp.silence_ratio||0.3,(adp.max_words||100)/500]);
+        // Post-process
+        memory.store([...sense.wave, moon.phase, moon.illumination/100, descent.adp.silence_ratio||0.3, (descent.adp.max_words||100)/500]);
         epochRef.current++;
-        if(epochRef.current%10===0)memory.decayAll();
+        if (epochRef.current % MEMORY_DECAY_EPOCH_INTERVAL === 0) memory.decayAll();
 
-        const dims=['Love','Logic','Fear','Creation','Moon','Illumination','Entropy','Complexity'];
-        return{
-          response,adapter:adp,vessel:wave,reasoning_mode:mode,llm_used:llmTarget,
-          llm_params:params,
-          dharma_metrics:{complexity_score:complexity,gini,cv,entropy:ent,mode_selected:mode,
-            epoch:epochRef.current,fep_energy:fep.energy,fep_convergence:fep.convergence,
-            fep_steps:fep.steps,fep_solver:'webworker_fep_js',
-            selected_dimensions:fep.selectedIndices.map(i=>dims[i]||'?')},
-          entropy:{source:'Math.random',quality:0.7,signal:Math.random()},
-          memory_status:{patterns_stored:memory.patterns.length,total_strength:memory.patterns.reduce((s,p)=>s+p.strength,0)},
+        const dims = ['Love','Logic','Fear','Creation','Moon','Illumination','Entropy','Complexity'];
+        return {
+          response, adapter:descent.adp, vessel:sense.wave, reasoning_mode:reason.mode,
+          llm_used:descent.llmTarget, llm_params:reason.params,
+          dharma_metrics:{
+            complexity_score:sense.complexity, gini:sense.gini, cv:sense.cv, entropy:sense.entropy,
+            mode_selected:reason.mode, epoch:epochRef.current,
+            fep_energy:reason.fep.energy, fep_convergence:reason.fep.convergence,
+            fep_steps:reason.fep.steps, fep_solver:'webworker_fep_js',
+            selected_dimensions:reason.fep.selectedIndices.map(i => dims[i]||'?'),
+          },
+          entropy:{source:'Math.random', quality:0.7, signal:Math.random()},
+          memory_status:{patterns_stored:memory.patterns.length, total_strength:memory.patterns.reduce((s,p) => s+p.strength, 0)},
           moon,
         };
       };
