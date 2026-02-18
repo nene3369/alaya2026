@@ -20,6 +20,7 @@ from typing import Any, Dict, List
 
 from lmm.dharma.patthana import PatthanaEngine, Paccaya
 from lmm.dharma.vow import VowConstraintEngine
+from lmm.reasoning.recovery import CircuitBreaker
 
 
 # ---------------------------------------------------------------------------
@@ -246,20 +247,51 @@ class SanghaOrchestrator:
             Subhuti(),
             Purna(self.vow_engine),
         ]
+        self._breakers: Dict[str, CircuitBreaker] = {
+            d.name: CircuitBreaker(
+                name=f"disciple:{d.name}",
+                failure_threshold=3,
+                cooldown=60.0,
+            )
+            for d in self.disciples
+        }
 
     async def _contemplate_with_timeout(
         self, disciple: DiscipleAgent, context: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Run a single disciple's contemplate with timeout protection."""
+        """Run a single disciple's contemplate with circuit breaker + timeout."""
+        breaker = self._breakers.get(disciple.name)
+
+        # Skip if circuit is open (too many recent failures)
+        if breaker is not None and not breaker.allow_request():
+            return {
+                "agent": disciple.name,
+                "insight": f"{disciple.name} circuit open — skipped.",
+                "verdict": "SKIPPED",
+            }
+
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 disciple.contemplate(context), timeout=self.timeout,
             )
+            if breaker is not None:
+                breaker.record_success()
+            return result
         except asyncio.TimeoutError:
+            if breaker is not None:
+                breaker.record_failure()
             return {
                 "agent": disciple.name,
                 "insight": f"{disciple.name} timed out after {self.timeout}s.",
                 "verdict": "TIMEOUT",
+            }
+        except Exception:
+            if breaker is not None:
+                breaker.record_failure()
+            return {
+                "agent": disciple.name,
+                "insight": f"{disciple.name} encountered an error.",
+                "verdict": "ERROR",
             }
 
     async def hold_council(self, context: Dict[str, Any]) -> CouncilResult:

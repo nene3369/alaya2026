@@ -10,6 +10,7 @@ from scipy import sparse
 
 from lmm.reasoning.alaya import AlayaMemory
 from lmm.reasoning.base import BaseReasoner, ReasonerResult, compute_complexity
+from lmm.reasoning.recovery import CircuitBreaker
 
 
 @dataclass
@@ -31,21 +32,37 @@ class DharmaReasonerOrchestrator:
 
     def __init__(self):
         self._reasoners: dict[str, BaseReasoner] = {}
+        self._breakers: dict[str, CircuitBreaker] = {}
 
     def register(self, reasoner: BaseReasoner) -> None:
         """Register a reasoning mode."""
         self._reasoners[reasoner.mode] = reasoner
+        self._breakers[reasoner.mode] = CircuitBreaker(
+            name=f"reasoner:{reasoner.mode}",
+            failure_threshold=3,
+            cooldown=30.0,
+        )
 
     @property
     def available_modes(self) -> list[str]:
         return list(self._reasoners.keys())
+
+    def _is_available(self, mode: str) -> bool:
+        """Check if a mode is registered and its circuit breaker allows requests."""
+        if mode not in self._reasoners:
+            return False
+        breaker = self._breakers.get(mode)
+        return breaker is None or breaker.allow_request()
 
     def select_mode(
         self,
         h: np.ndarray,
         **kwargs,
     ) -> str:
-        """Auto-select reasoning mode based on input characteristics."""
+        """Auto-select reasoning mode based on input characteristics.
+
+        Skips modes whose circuit breakers are open (too many recent failures).
+        """
         if not self._reasoners:
             raise RuntimeError("No reasoners registered")
 
@@ -53,16 +70,21 @@ class DharmaReasonerOrchestrator:
         c = complexity.complexity_score
 
         # Low complexity → adaptive (fast convergence)
-        if c < 0.3 and "adaptive" in self._reasoners:
+        if c < 0.3 and self._is_available("adaptive"):
             return "adaptive"
         # Medium complexity → theoretical (logical consistency)
-        if c < 0.6 and "theoretical" in self._reasoners:
+        if c < 0.6 and self._is_available("theoretical"):
             return "theoretical"
         # High complexity → hyper (abductive exploration)
-        if "hyper" in self._reasoners:
+        if self._is_available("hyper"):
             return "hyper"
 
-        # Fallback to first available
+        # Fallback to first available mode with open circuit
+        for mode in self._reasoners:
+            if self._is_available(mode):
+                return mode
+
+        # All circuits open — force first reasoner (will reset on success)
         return next(iter(self._reasoners))
 
     def reason(
@@ -156,10 +178,15 @@ class DharmaReasonerOrchestrator:
         J: sparse.csr_matrix,
         **kwargs,
     ) -> ReasonerResult | None:
-        """Run a single reasoner with a wall-clock timeout.
+        """Run a single reasoner with circuit breaker + wall-clock timeout.
 
-        Returns None if the reasoner times out or raises an exception.
+        Returns None if the circuit is open, the reasoner times out,
+        or raises an exception.  Records success/failure to the breaker.
         """
+        breaker = self._breakers.get(reasoner_name)
+        if breaker is not None and not breaker.allow_request():
+            return None  # Circuit is open — skip this reasoner
+
         reasoner = self._reasoners[reasoner_name]
         result_box: list[ReasonerResult | None] = [None]
         error_box: list[Exception | None] = [None]
@@ -174,11 +201,26 @@ class DharmaReasonerOrchestrator:
         thread.start()
         thread.join(timeout=self.PHASE_TIMEOUT)
 
-        if thread.is_alive():
+        if thread.is_alive() or error_box[0] is not None:
+            if breaker is not None:
+                breaker.record_failure()
             return None
-        if error_box[0] is not None:
-            return None
+
+        if breaker is not None:
+            breaker.record_success()
         return result_box[0]
+
+    @property
+    def circuit_breaker_stats(self) -> dict[str, dict]:
+        """Return circuit breaker stats for all registered reasoners."""
+        return {
+            name: {
+                "state": b.state.value,
+                "failures": b._failure_count,
+                "consecutive_failures": b._consecutive_failures,
+            }
+            for name, b in self._breakers.items()
+        }
 
     def think(
         self,
