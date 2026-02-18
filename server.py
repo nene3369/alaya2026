@@ -10,12 +10,16 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import math
 import os
 import struct
+import threading
 import time
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -241,6 +245,30 @@ class ReasoningEngine:
         self.orchestrator.register(self.theoretical)
         self.orchestrator.register(self.pineal)
 
+        # FEP結果キャッシュ (直近16件のLRU)
+        self._cache: dict[str, tuple[dict, float]] = {}
+        self._cache_max = 16
+        self._cache_ttl = 30.0  # 30秒TTL
+
+    def _cache_key(self, wave: list[float], complexity: float) -> str:
+        """波長を量子化してキャッシュキーを生成 (小数2桁)."""
+        rounded = tuple(round(v, 2) for v in wave) + (round(complexity, 2),)
+        return hashlib.md5(str(rounded).encode()).hexdigest()[:12]
+
+    def _cache_get(self, key: str) -> dict | None:
+        if key in self._cache:
+            result, ts = self._cache[key]
+            if time.time() - ts < self._cache_ttl:
+                return result
+            del self._cache[key]
+        return None
+
+    def _cache_put(self, key: str, result: dict):
+        if len(self._cache) >= self._cache_max:
+            oldest = min(self._cache, key=lambda k: self._cache[k][1])
+            del self._cache[oldest]
+        self._cache[key] = (result, time.time())
+
     def run(
         self,
         wave: list[float],
@@ -250,13 +278,21 @@ class ReasoningEngine:
         mode_override: str | None = None,
     ) -> dict:
         """実際に FEP ODE / QUBO 推論を実行し、結果を返す."""
+        # キャッシュチェック (同一波長パターンの再計算を回避)
+        ck = self._cache_key(wave, complexity_score)
+        cached = self._cache_get(ck)
+        if cached is not None:
+            cached["solver_used"] = cached.get("solver_used", "") + "+cached"
+            return cached
+
         h, J = build_reasoning_vectors(wave, moon, complexity_score)
 
         # オーケストレーターで推論 (think = 多段エスカレーション)
+        # 早期打切り: 収束閾値を緩めて不要なエスカレーションを抑制
         result = self.orchestrator.think(
             h, J,
             alaya=memory,
-            hyper_convergence_threshold=0.01,
+            hyper_convergence_threshold=0.05,  # 0.01→0.05: 早期打切りを促進
         )
 
         best = result.best_result
@@ -272,7 +308,7 @@ class ReasoningEngine:
                       "MoonPhase", "Illumination", "Entropy", "Complexity"]
         selected_dims = [dim_labels[int(i)] for i in selected if int(i) < len(dim_labels)]
 
-        return {
+        fep_result = {
             "mode_selected": result.mode_selected,
             "selected_indices": [int(i) for i in selected],
             "selected_dimensions": selected_dims,
@@ -282,6 +318,35 @@ class ReasoningEngine:
             "power_history": power_history[-10:],  # 最後の10ステップ
             "solver_used": best.solver_used,
         }
+        self._cache_put(ck, fep_result)
+        return fep_result
+
+    async def run_async(
+        self,
+        wave: list[float],
+        moon: MoonPhase,
+        complexity_score: float,
+        memory: AlayaMemory,
+        timeout: float = 2.0,
+    ) -> dict:
+        """FEP推論を別スレッドで実行 (asyncイベントループをブロックしない)."""
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self.run, wave, moon, complexity_score, memory),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            # タイムアウト時はフォールバック結果を返す
+            return {
+                "mode_selected": "adaptive",
+                "selected_indices": [0, 1, 2, 3],
+                "selected_dimensions": ["Love", "Logic", "Fear", "Creation"],
+                "energy": 0.0,
+                "convergence": 1.0,
+                "steps_used": 0,
+                "power_history": [],
+                "solver_used": "timeout_fallback",
+            }
 
 
 # ===================================================================
@@ -454,14 +519,14 @@ class ReasoningModeController:
 
     @staticmethod
     def _sleep(wave, complexity, moon, memory, history, rr=None) -> LLMParams:
-        # Sleep mode: consolidate memory, no LLM call needed
-        memory.decay()
+        # Sleep mode: memory decay is handled by the main pipeline loop (epoch%10)
+        # to avoid double-decay which causes excessive pattern forgetting.
         return LLMParams(
             temperature=0.3,
             max_tokens=200,
             system_prompt=(
                 "禅定モード。対話パターンの統合・圧縮を実行中。\n"
-                f"記憶の減衰を適用: {memory.n_patterns}パターン残存\n"
+                f"記憶のパターン数: {memory.n_patterns}パターン残存\n"
                 "静寂の中で、本質的な一言だけを述べよ。"
             ),
         )
@@ -747,9 +812,9 @@ class DescentPipeline:
         ])
         self.memory.store(pattern)
 
-        # Phase 2: REASON — 実際にFEP ODE / QUBOを実行
-        reasoning_result = self.reasoning_engine.run(
-            wave, moon, complexity, self.memory,
+        # Phase 2: REASON — FEP ODE / QUBOを別スレッドで実行 (2秒タイムアウト)
+        reasoning_result = await self.reasoning_engine.run_async(
+            wave, moon, complexity, self.memory, timeout=2.0,
         )
         # オーケストレーターが選択したモードを使用
         mode = reasoning_result["mode_selected"]
@@ -808,7 +873,9 @@ class DescentPipeline:
             f"核心原則: {adapter.get('key_principle', '慈悲と智慧の均衡')}"
         )
 
-        conv = [{"role": m["role"], "content": m["content"]} for m in history]
+        # Limit history to last 20 messages to reduce API costs
+        recent_history = history[-20:] if len(history) > 20 else history
+        conv = [{"role": m["role"], "content": m["content"]} for m in recent_history]
         conv.append({"role": "user", "content": message})
 
         response_text = await llm_call(
@@ -823,6 +890,10 @@ class DescentPipeline:
         ]))
 
         self.epoch += 1
+
+        # Memory consolidation: decay every 10 epochs (single location to avoid double-decay)
+        if self.epoch % 10 == 0:
+            self.memory.decay()
 
         entropy_signal = params.entropy_signal if params.entropy_signal else harvest_entropy()
 
@@ -882,7 +953,60 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-pipeline = DescentPipeline()
+
+# ===================================================================
+# Session Manager — セッション別パイプライン管理 + 自動クリーンアップ
+# ===================================================================
+SESSION_TTL = 300  # 5分未使用でクリーンアップ
+
+
+class SessionManager:
+    """セッション別にDescentPipelineを管理し、メモリ汚染を防止."""
+
+    def __init__(self):
+        self._sessions: dict[str, tuple[DescentPipeline, float]] = {}
+        self._lock = threading.Lock()
+        self._default = DescentPipeline()
+
+    def get(self, session_id: str | None = None) -> DescentPipeline:
+        if not session_id:
+            return self._default
+        with self._lock:
+            if session_id in self._sessions:
+                pipe, _ = self._sessions[session_id]
+                self._sessions[session_id] = (pipe, time.time())
+                return pipe
+            pipe = DescentPipeline()
+            self._sessions[session_id] = (pipe, time.time())
+            return pipe
+
+    def cleanup(self):
+        """TTL超過セッションを削除."""
+        now = time.time()
+        with self._lock:
+            expired = [
+                sid for sid, (_, ts) in self._sessions.items()
+                if now - ts > SESSION_TTL
+            ]
+            for sid in expired:
+                del self._sessions[sid]
+
+    @property
+    def active_sessions(self) -> int:
+        return len(self._sessions)
+
+
+sessions = SessionManager()
+
+
+# Background cleanup task
+@app.on_event("startup")
+async def start_session_cleanup():
+    async def _cleanup_loop():
+        while True:
+            await asyncio.sleep(60)
+            sessions.cleanup()
+    asyncio.create_task(_cleanup_loop())
 
 
 class DescentRequest(BaseModel):
@@ -891,6 +1015,7 @@ class DescentRequest(BaseModel):
     llm_preference: str = "auto"  # "claude" | "gemini" | "auto"
     claude_api_key: str = ""
     gemini_api_key: str = ""
+    session_id: str = ""  # セッション別パイプライン
 
 
 @app.post("/api/descent")
@@ -905,6 +1030,7 @@ async def descent(req: DescentRequest):
     if not api_keys:
         return {"error": "At least one API key (claude or gemini) is required"}
 
+    pipeline = sessions.get(req.session_id or None)
     result = await pipeline.execute(
         req.message, req.history, api_keys, req.llm_preference,
     )
@@ -915,13 +1041,16 @@ async def descent(req: DescentRequest):
 async def sense(req: dict):
     """Emotional wavelength analysis only."""
     text = req.get("message", "")
+    session_id = req.get("session_id", "")
+    pipeline = sessions.get(session_id or None)
     wave = pipeline.vessel.auto_sense(text)
     return {"vessel": wave, "labels": DIMENSION_LABELS}
 
 
 @app.get("/api/status")
-async def status():
+async def status(session_id: str = ""):
     """Current system status."""
+    pipeline = sessions.get(session_id or None)
     moon = compute_moon_phase()
     return {
         "vessel": pipeline.vessel.exist(),
@@ -935,6 +1064,7 @@ async def status():
             "adaptive", "theoretical", "hyper", "active",
             "alaya", "sleep", "embodied", "pineal",
         ],
+        "active_sessions": sessions.active_sessions,
     }
 
 
