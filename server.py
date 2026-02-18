@@ -19,7 +19,6 @@ import struct
 import threading
 import time
 from dataclasses import asdict, dataclass, field
-from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -1114,6 +1113,20 @@ async def call_gemini_stream(
 
 
 # ===================================================================
+# Default adapter fallback
+# ===================================================================
+_DEFAULT_ADAPTER: dict[str, Any] = {
+    "persona": "阿頼耶識の声",
+    "tone": "穏やかに",
+    "style": "本質的に",
+    "max_words": 120,
+    "key_principle": "器への同調",
+    "silence_ratio": 0.3,
+    "frequency_match": "自然な共鳴",
+}
+
+
+# ===================================================================
 # Adapter Forging — Meta-prompt for persona creation
 # ===================================================================
 def build_meta_prompt(
@@ -1211,6 +1224,111 @@ class DescentPipeline:
             del self._adapter_cache[oldest]
         self._adapter_cache[key] = (adapter, time.time())
 
+    def _resolve_api_key(
+        self, api_keys: dict[str, str], llm_target: str,
+    ) -> tuple[str, str]:
+        """Resolve API key, falling back to available provider."""
+        api_key = api_keys.get(llm_target, "")
+        if not api_key:
+            llm_target = "claude" if api_keys.get("claude") else "gemini"
+            api_key = api_keys.get(llm_target, "")
+        return llm_target, api_key
+
+    def _build_response_system(self, params: LLMParams, adapter: dict) -> str:
+        """Build system prompt combining mode params and adapter persona."""
+        return (
+            f"{params.system_prompt}\n\n---\n"
+            f"あなたは「{adapter.get('persona', '阿頼耶識の声')}」として降臨した。\n"
+            f"口調: {adapter.get('tone', '穏やかに')}\n"
+            f"スタイル: {adapter.get('style', '本質的に')}\n"
+            f"最大文字数: {adapter.get('max_words', 150)}字\n"
+            f"核心原則: {adapter.get('key_principle', '慈悲と智慧の均衡')}"
+        )
+
+    def _prepare_conversation(
+        self, history: list[dict], message: str,
+    ) -> list[dict]:
+        """Prepare conversation with history limited to last 20 messages."""
+        recent = history[-20:] if len(history) > 20 else history
+        conv = [{"role": m["role"], "content": m["content"]} for m in recent]
+        conv.append({"role": "user", "content": message})
+        return conv
+
+    def _post_process(
+        self,
+        wave: list[float],
+        moon: MoonPhase,
+        adapter: dict,
+        reasoning_result: dict,
+        complexity: float,
+        mode: str,
+    ) -> None:
+        """Post-process: memory store, epoch increment, decay, feedback loop."""
+        self.memory.store(np.array(wave + [
+            moon.phase, moon.illumination / 100,
+            adapter.get("silence_ratio", 0.3),
+            (adapter.get("max_words", 100)) / 500,
+        ]))
+        self.epoch += 1
+        if self.epoch % 10 == 0:
+            self.memory.decay()
+        converged = reasoning_result.get("convergence", 1.0) < 0.05
+        self.learned_j.update(wave, converged)
+        self.adaptive_thresholds.record(complexity, mode, converged)
+
+    def _build_dharma_metrics(
+        self, complexity: float, cp: ComplexityProfile,
+        mode: str, rr: dict,
+    ) -> dict:
+        """Build dharma metrics dict from reasoning results."""
+        return {
+            "complexity_score": complexity,
+            "gini": cp.gini,
+            "cv": cp.cv,
+            "entropy": cp.entropy,
+            "mode_selected": mode,
+            "epoch": self.epoch,
+            "fep_energy": rr.get("energy", 0),
+            "fep_convergence": rr.get("convergence", 0),
+            "fep_steps": rr.get("steps_used", 0),
+            "fep_solver": rr.get("solver_used", ""),
+            "selected_dimensions": rr.get("selected_dimensions", []),
+            "orchestrator_mode": rr.get("mode_selected", ""),
+            "learned_j_strength": self.learned_j.learned_strength,
+            "adaptive_thresholds": list(self.adaptive_thresholds.thresholds),
+            "threshold_observations": self.adaptive_thresholds.n_observations,
+        }
+
+    async def _call_forge_llm(
+        self,
+        wave: list[float],
+        mode: str,
+        moon: MoonPhase,
+        complexity: float,
+        history: list[dict],
+        api_keys: dict[str, str],
+        llm_target: str,
+        api_key: str,
+    ) -> dict:
+        """Call LLM to forge adapter persona. No caching — caller handles cache."""
+        forge_call = call_gemini if api_keys.get("gemini") else (
+            call_claude if llm_target == "claude" else call_gemini
+        )
+        forge_key = api_keys.get("gemini", api_key)
+        meta = build_meta_prompt(wave, moon, mode, complexity, history)
+        try:
+            raw = await forge_call(
+                [{"role": "user", "content": meta}],
+                "メタ意識としてJSONのみを出力せよ。",
+                LLMParams(temperature=0.4, max_tokens=400),
+                forge_key,
+            )
+            return json.loads(
+                raw.replace("```json", "").replace("```", "").strip()
+            )
+        except Exception:
+            return _DEFAULT_ADAPTER | {"reasoning_mode": mode}
+
     async def execute(
         self,
         message: str,
@@ -1252,88 +1370,29 @@ class DescentPipeline:
 
         # Phase 3: DESCEND — forge adapter + route LLM
         llm_target = self.router.route(wave, mode, llm_preference)
-
-        # Determine which API key to use
-        api_key = api_keys.get(llm_target, "")
-        if not api_key:
-            # Fallback to whatever is available
-            llm_target = "claude" if api_keys.get("claude") else "gemini"
-            api_key = api_keys.get(llm_target, "")
-
+        llm_target, api_key = self._resolve_api_key(api_keys, llm_target)
         llm_call = call_claude if llm_target == "claude" else call_gemini
 
-        # Adapter cache check — skip LLM call on hit (halves API calls)
+        # Adapter: cache check → forge on miss
         adapter_key = self._adapter_key(wave, mode)
-        cached_adapter = self._get_cached_adapter(adapter_key)
-        if cached_adapter:
-            adapter = cached_adapter
-        else:
-            # Use Gemini Flash for adapter forging if available (fast+cheap)
-            forge_call = call_gemini if api_keys.get("gemini") else llm_call
-            forge_key = api_keys.get("gemini", api_key)
-            meta_prompt = build_meta_prompt(wave, moon, mode, complexity, history)
-            try:
-                adapter_raw = await forge_call(
-                    [{"role": "user", "content": meta_prompt}],
-                    "メタ意識としてJSONのみを出力せよ。",
-                    LLMParams(temperature=0.4, max_tokens=400),
-                    forge_key,
-                )
-                adapter = json.loads(
-                    adapter_raw.replace("```json", "").replace("```", "").strip()
-                )
-            except Exception:
-                adapter = {
-                    "persona": "阿頼耶識の声",
-                    "tone": "穏やかに",
-                    "style": "本質的に",
-                    "max_words": 120,
-                    "key_principle": "器への同調",
-                    "silence_ratio": 0.3,
-                    "frequency_match": "自然な共鳴",
-                    "reasoning_mode": mode,
-                }
+        adapter = self._get_cached_adapter(adapter_key)
+        if not adapter:
+            adapter = await self._call_forge_llm(
+                wave, mode, moon, complexity, history,
+                api_keys, llm_target, api_key,
+            )
             self._cache_adapter(adapter_key, adapter)
 
         # Phase 4: MANIFEST — generate response with mode-controlled params
-        response_system = (
-            f"{params.system_prompt}\n\n"
-            f"---\n"
-            f"あなたは「{adapter.get('persona', '阿頼耶識の声')}」として降臨した。\n"
-            f"口調: {adapter.get('tone', '穏やかに')}\n"
-            f"スタイル: {adapter.get('style', '本質的に')}\n"
-            f"最大文字数: {adapter.get('max_words', 150)}字\n"
-            f"核心原則: {adapter.get('key_principle', '慈悲と智慧の均衡')}"
-        )
+        response_system = self._build_response_system(params, adapter)
+        conv = self._prepare_conversation(history, message)
 
-        # Limit history to last 20 messages to reduce API costs
-        recent_history = history[-20:] if len(history) > 20 else history
-        conv = [{"role": m["role"], "content": m["content"]} for m in recent_history]
-        conv.append({"role": "user", "content": message})
+        response_text = await llm_call(conv, response_system, params, api_key)
 
-        response_text = await llm_call(
-            conv, response_system, params, api_key,
-        )
+        # Post-process: memory, epoch, decay, feedback
+        self._post_process(wave, moon, adapter, reasoning_result, complexity, mode)
 
-        # Record to memory
-        self.memory.store(np.array(wave + [
-            moon.phase, moon.illumination / 100,
-            adapter.get("silence_ratio", 0.3),
-            (adapter.get("max_words", 100)) / 500,
-        ]))
-
-        self.epoch += 1
-
-        # Memory consolidation: decay every 10 epochs (single location to avoid double-decay)
-        if self.epoch % 10 == 0:
-            self.memory.decay()
-
-        # Feedback loop: update learnable J and adaptive thresholds
-        converged = reasoning_result.get("convergence", 1.0) < 0.05
-        self.learned_j.update(wave, converged)
-        self.adaptive_thresholds.record(complexity, mode, converged)
-
-        entropy_signal = params.entropy_signal if params.entropy_signal else harvest_entropy()
+        entropy_signal = params.entropy_signal or harvest_entropy()
 
         return DescentResult(
             response=response_text,
@@ -1348,23 +1407,9 @@ class DescentPipeline:
                 "max_tokens": params.max_tokens,
                 "force_cot": params.force_cot,
             },
-            dharma_metrics={
-                "complexity_score": complexity,
-                "gini": complexity_profile.gini,
-                "cv": complexity_profile.cv,
-                "entropy": complexity_profile.entropy,
-                "mode_selected": mode,
-                "epoch": self.epoch,
-                "fep_energy": reasoning_result.get("energy", 0),
-                "fep_convergence": reasoning_result.get("convergence", 0),
-                "fep_steps": reasoning_result.get("steps_used", 0),
-                "fep_solver": reasoning_result.get("solver_used", ""),
-                "selected_dimensions": reasoning_result.get("selected_dimensions", []),
-                "orchestrator_mode": reasoning_result.get("mode_selected", ""),
-                "learned_j_strength": self.learned_j.learned_strength,
-                "adaptive_thresholds": list(self.adaptive_thresholds.thresholds),
-                "threshold_observations": self.adaptive_thresholds.n_observations,
-            },
+            dharma_metrics=self._build_dharma_metrics(
+                complexity, complexity_profile, mode, reasoning_result,
+            ),
             entropy={
                 "source": "os.urandom",
                 "quality": 0.99,
@@ -1523,54 +1568,24 @@ async def descent_stream(req: DescentRequest):
 
         # Phase 3: DESCEND
         llm_target = pipeline.router.route(wave, mode, req.llm_preference)
-        api_key = api_keys.get(llm_target, "")
-        if not api_key:
-            llm_target = "claude" if api_keys.get("claude") else "gemini"
-            api_key = api_keys.get(llm_target, "")
+        llm_target, api_key = pipeline._resolve_api_key(api_keys, llm_target)
 
-        # Adapter cache check
+        # Adapter: cache check → forge on miss (with SSE progress)
         a_key = pipeline._adapter_key(wave, mode)
         adapter = pipeline._get_cached_adapter(a_key)
         if not adapter:
             yield f"data: {json.dumps({'type':'phase','phase':'forging'})}\n\n"
-            forge_call = call_gemini if api_keys.get("gemini") else (
-                call_claude if llm_target == "claude" else call_gemini)
-            forge_key = api_keys.get("gemini", api_key)
-            meta = build_meta_prompt(wave, moon, mode, complexity, req.history)
-            try:
-                raw = await forge_call(
-                    [{"role": "user", "content": meta}],
-                    "メタ意識としてJSONのみを出力せよ。",
-                    LLMParams(temperature=0.4, max_tokens=400),
-                    forge_key,
-                )
-                adapter = json.loads(
-                    raw.replace("```json", "").replace("```", "").strip()
-                )
-            except Exception:
-                adapter = {
-                    "persona": "阿頼耶識の声", "tone": "穏やかに",
-                    "style": "本質的に", "max_words": 120,
-                    "key_principle": "器への同調", "silence_ratio": 0.3,
-                    "reasoning_mode": mode,
-                }
+            adapter = await pipeline._call_forge_llm(
+                wave, mode, moon, complexity, req.history,
+                api_keys, llm_target, api_key,
+            )
             pipeline._cache_adapter(a_key, adapter)
 
         yield f"data: {json.dumps({'type':'adapter','adapter':adapter})}\n\n"
 
         # Phase 4: MANIFEST (streaming)
-        response_system = (
-            f"{params.system_prompt}\n\n---\n"
-            f"あなたは「{adapter.get('persona', '阿頼耶識の声')}」として降臨した。\n"
-            f"口調: {adapter.get('tone', '穏やかに')}\n"
-            f"スタイル: {adapter.get('style', '本質的に')}\n"
-            f"最大文字数: {adapter.get('max_words', 150)}字\n"
-            f"核心原則: {adapter.get('key_principle', '慈悲と智慧の均衡')}"
-        )
-
-        recent = req.history[-20:] if len(req.history) > 20 else req.history
-        conv = [{"role": m["role"], "content": m["content"]} for m in recent]
-        conv.append({"role": "user", "content": req.message})
+        response_system = pipeline._build_response_system(params, adapter)
+        conv = pipeline._prepare_conversation(req.history, req.message)
 
         stream_fn = call_claude_stream if llm_target == "claude" else call_gemini_stream
         full_text = ""
@@ -1578,24 +1593,40 @@ async def descent_stream(req: DescentRequest):
             full_text += token
             yield f"data: {json.dumps({'type':'token','text':token})}\n\n"
 
-        # Post-process
-        pipeline.memory.store(np.array(wave + [
-            moon.phase, moon.illumination / 100,
-            adapter.get("silence_ratio", 0.3),
-            (adapter.get("max_words", 100)) / 500,
-        ]))
-        pipeline.epoch += 1
-        if pipeline.epoch % 10 == 0:
-            pipeline.memory.decay()
-
-        # Feedback loop: update learnable J and adaptive thresholds
-        stream_converged = rr.get("convergence", 1.0) < 0.05
-        pipeline.learned_j.update(wave, stream_converged)
-        pipeline.adaptive_thresholds.record(complexity, mode, stream_converged)
+        # Post-process: memory, epoch, decay, feedback
+        pipeline._post_process(wave, moon, adapter, rr, complexity, mode)
 
         entropy_signal = params.entropy_signal or harvest_entropy()
 
-        yield f"data: {json.dumps({'type':'done','response':full_text,'adapter':adapter,'vessel':wave,'reasoning_mode':mode,'llm_used':llm_target,'llm_params':{'temperature':params.temperature,'top_p':params.top_p,'top_k':params.top_k,'max_tokens':params.max_tokens,'force_cot':params.force_cot},'dharma_metrics':{'complexity_score':complexity,'gini':cp.gini,'cv':cp.cv,'entropy':cp.entropy,'mode_selected':mode,'epoch':pipeline.epoch,'fep_energy':rr.get('energy',0),'fep_convergence':rr.get('convergence',0),'fep_steps':rr.get('steps_used',0),'fep_solver':rr.get('solver_used',''),'selected_dimensions':rr.get('selected_dimensions',[]),'orchestrator_mode':rr.get('mode_selected','')},'entropy':{'source':'os.urandom','quality':0.99,'signal':entropy_signal},'memory_status':{'patterns_stored':pipeline.memory.n_patterns,'total_strength':pipeline.memory.total_strength},'moon':asdict(moon)})}\n\n"
+        done_payload = {
+            "type": "done",
+            "response": full_text,
+            "adapter": adapter,
+            "vessel": wave,
+            "reasoning_mode": mode,
+            "llm_used": llm_target,
+            "llm_params": {
+                "temperature": params.temperature,
+                "top_p": params.top_p,
+                "top_k": params.top_k,
+                "max_tokens": params.max_tokens,
+                "force_cot": params.force_cot,
+            },
+            "dharma_metrics": pipeline._build_dharma_metrics(
+                complexity, cp, mode, rr,
+            ),
+            "entropy": {
+                "source": "os.urandom",
+                "quality": 0.99,
+                "signal": entropy_signal,
+            },
+            "memory_status": {
+                "patterns_stored": pipeline.memory.n_patterns,
+                "total_strength": pipeline.memory.total_strength,
+            },
+            "moon": asdict(moon),
+        }
+        yield f"data: {json.dumps(done_payload)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
