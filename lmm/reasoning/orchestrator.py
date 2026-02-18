@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -146,6 +147,39 @@ class DharmaReasonerOrchestrator:
         all_result.ensemble_indices = ensemble_indices
         return all_result
 
+    PHASE_TIMEOUT: float = 5.0  # max seconds per reasoning phase
+
+    def _reason_with_timeout(
+        self,
+        reasoner_name: str,
+        h: np.ndarray,
+        J: sparse.csr_matrix,
+        **kwargs,
+    ) -> ReasonerResult | None:
+        """Run a single reasoner with a wall-clock timeout.
+
+        Returns None if the reasoner times out or raises an exception.
+        """
+        reasoner = self._reasoners[reasoner_name]
+        result_box: list[ReasonerResult | None] = [None]
+        error_box: list[Exception | None] = [None]
+
+        def _run():
+            try:
+                result_box[0] = reasoner.reason(h, J, **kwargs)
+            except Exception as exc:
+                error_box[0] = exc
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        thread.join(timeout=self.PHASE_TIMEOUT)
+
+        if thread.is_alive():
+            return None
+        if error_box[0] is not None:
+            return None
+        return result_box[0]
+
     def think(
         self,
         h: np.ndarray,
@@ -163,6 +197,9 @@ class DharmaReasonerOrchestrator:
         Phase 4: Escalate to active inference if still not converged
         Phase 5: Re-compute final_P_err after each escalation
         Phase 6: Record to AlayaMemory if converged
+
+        Each phase has a wall-clock timeout (PHASE_TIMEOUT) to prevent
+        freezing on slow or stuck reasoners.
 
         Parameters
         ----------
@@ -182,11 +219,16 @@ class DharmaReasonerOrchestrator:
         if not self._reasoners:
             raise RuntimeError("No reasoners registered")
 
-        # Phase 1: Standard reasoning
+        # Phase 1: Standard reasoning (with timeout)
         mode = self.select_mode(h, **kwargs)
-        result = self._reasoners[mode].reason(
-            h, J, sila_gamma=sila_gamma, **kwargs,
+        result = self._reason_with_timeout(
+            mode, h, J, sila_gamma=sila_gamma, **kwargs,
         )
+        if result is None:
+            # Phase 1 timed out — direct call as last resort
+            fallback = next(iter(self._reasoners))
+            result = self._reasoners[fallback].reason(h, J, sila_gamma=sila_gamma)
+            mode = fallback
         power_history = list(result.power_history) if result.power_history else []
         final_P_err = power_history[-1] if power_history else float("inf")
         status = mode
@@ -197,14 +239,15 @@ class DharmaReasonerOrchestrator:
             and "hyper" in self._reasoners
             and status != "hyper"
         ):
-            hyper_result = self._reasoners["hyper"].reason(
-                h, J, sila_gamma=sila_gamma,
+            hyper_result = self._reason_with_timeout(
+                "hyper", h, J, sila_gamma=sila_gamma,
             )
-            power_history.extend(hyper_result.power_history or [])
-            final_P_err = power_history[-1] if power_history else float("inf")
-            if hyper_result.energy < result.energy:
-                result = hyper_result
-                status = "hyper"
+            if hyper_result is not None:
+                power_history.extend(hyper_result.power_history or [])
+                final_P_err = power_history[-1] if power_history else float("inf")
+                if hyper_result.energy < result.energy:
+                    result = hyper_result
+                    status = "hyper"
 
         # Phase 4: Escalate to active inference
         if (
@@ -212,14 +255,15 @@ class DharmaReasonerOrchestrator:
             and "active" in self._reasoners
             and status != "active"
         ):
-            active_result = self._reasoners["active"].reason(
-                h, J, sila_gamma=sila_gamma,
+            active_result = self._reason_with_timeout(
+                "active", h, J, sila_gamma=sila_gamma,
             )
-            power_history.extend(active_result.power_history or [])
-            final_P_err = power_history[-1] if power_history else float("inf")
-            if active_result.energy < result.energy:
-                result = active_result
-                status = "active"
+            if active_result is not None:
+                power_history.extend(active_result.power_history or [])
+                final_P_err = power_history[-1] if power_history else float("inf")
+                if active_result.energy < result.energy:
+                    result = active_result
+                    status = "active"
 
         # Phase 5: De-escalation — if converged at higher level, try simpler
         if (
@@ -227,11 +271,10 @@ class DharmaReasonerOrchestrator:
             and status != mode
             and "adaptive" in self._reasoners
         ):
-            # Problem was easier than expected; de-escalate to save compute
-            adaptive_result = self._reasoners["adaptive"].reason(
-                h, J, sila_gamma=sila_gamma, **kwargs,
+            adaptive_result = self._reason_with_timeout(
+                "adaptive", h, J, sila_gamma=sila_gamma, **kwargs,
             )
-            if adaptive_result.energy <= result.energy * 1.1:
+            if adaptive_result is not None and adaptive_result.energy <= result.energy * 1.1:
                 result = adaptive_result
                 status = "adaptive"
 

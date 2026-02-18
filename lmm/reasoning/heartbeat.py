@@ -134,12 +134,23 @@ class HeartbeatDaemon:
 
         return np.array(values)
 
+    TICK_TIMEOUT: float = 2.0  # max seconds per tick
+
     async def tick(self) -> HeartbeatTelemetry:
         """Execute a single tick of the heartbeat and return telemetry.
 
         This is the core method. The run() loop calls this repeatedly.
         Exposed publicly for deterministic testing.
         """
+        try:
+            async with asyncio.timeout(self.TICK_TIMEOUT):
+                return await self._tick_inner()
+        except (asyncio.TimeoutError, TimeoutError):
+            # Tick timed out — return stale snapshot rather than blocking
+            return self.snapshot()
+
+    async def _tick_inner(self) -> HeartbeatTelemetry:
+        """Inner tick logic, separated for timeout wrapping."""
         async with self._lock:
             # 1. Harvest hardware entropy
             entropy_raw = self._harvest_entropy(self.n_dims * 4)
@@ -227,7 +238,13 @@ class HeartbeatDaemon:
     async def run(self) -> None:
         """Main heartbeat loop. Launch via asyncio.create_task(daemon.run())."""
         while not self._stop_event:
-            await self.tick()
+            try:
+                await self.tick()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                # Prevent silent daemon death on unexpected errors
+                pass
             if self.deterministic:
                 break
             await asyncio.sleep(self._dt)
