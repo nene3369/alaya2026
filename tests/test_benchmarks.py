@@ -572,6 +572,128 @@ class TestDharmaLMMBenchmarks:
 # Summary report — runs last (z-prefix ensures ordering)
 # ===================================================================
 
+# ===================================================================
+# 11. Scalability tests — verify sparse solvers at large n
+# ===================================================================
+
+class TestScalabilitySparse:
+    def test_sa_sparse_n10k(self):
+        """SA at n=10,000 should never materialise dense Q (would be 800MB)."""
+        rng = np.random.RandomState(42)
+        n, k = 10_000, 50
+        builder = QUBOBuilder(n_variables=n)
+        builder.add_surprise_objective(rng.rand(n), alpha=1.0)
+        builder.add_cardinality_constraint(k=k, gamma=10.0)
+        solver = ClassicalQUBOSolver(builder)
+        t0 = time.time()
+        x = solver.solve(method="sa", k=k, n_iterations=500)
+        elapsed = time.time() - t0
+        n_sel = int((x > 0.5).sum())
+        _record("Scalability", "SA sparse (n=10K)", elapsed, 60.0, f"sel={n_sel}")
+        assert elapsed < 60.0
+        assert n_sel == k
+
+    def test_greedy_sparse_n10k(self):
+        """Greedy at n=10,000 should use sparse internals only."""
+        rng = np.random.RandomState(42)
+        n, k = 10_000, 50
+        builder = QUBOBuilder(n_variables=n)
+        builder.add_surprise_objective(rng.rand(n), alpha=1.0)
+        builder.add_cardinality_constraint(k=k, gamma=10.0)
+        solver = ClassicalQUBOSolver(builder)
+        t0 = time.time()
+        x = solver.solve(method="greedy", k=k)
+        elapsed = time.time() - t0
+        n_sel = int((x > 0.5).sum())
+        _record("Scalability", "Greedy sparse (n=10K)", elapsed, 60.0, f"sel={n_sel}")
+        assert elapsed < 60.0
+        assert n_sel == k
+
+    def test_project_to_k_sparse_n10k(self):
+        """_project_to_k at n=10,000 should use sparse path."""
+        rng = np.random.RandomState(42)
+        n, k = 10_000, 50
+        builder = QUBOBuilder(n_variables=n)
+        builder.add_surprise_objective(rng.rand(n), alpha=1.0)
+        builder.add_cardinality_constraint(k=k, gamma=10.0)
+        solver = ClassicalQUBOSolver(builder)
+        # Create a random binary vector with wrong cardinality
+        x = np.zeros(n)
+        x[:k + 10] = 1.0  # 10 too many
+        t0 = time.time()
+        x_proj = solver._project_to_k(x, k)
+        elapsed = time.time() - t0
+        n_sel = int((x_proj > 0.5).sum())
+        _record("Scalability", "project_to_k (n=10K)", elapsed, 30.0, f"sel={n_sel}")
+        assert elapsed < 30.0
+        assert n_sel == k
+
+    def test_relaxation_sparse_n200(self):
+        """Relaxation at n=200 should use evaluate() not dense Q."""
+        rng = np.random.RandomState(42)
+        n, k = 200, 10
+        builder = QUBOBuilder(n_variables=n)
+        builder.add_surprise_objective(rng.rand(n), alpha=1.0)
+        builder.add_cardinality_constraint(k=k, gamma=10.0)
+        solver = ClassicalQUBOSolver(builder)
+        t0 = time.time()
+        x = solver.solve(method="relaxation", n_restarts=2)
+        elapsed = time.time() - t0
+        _record("Scalability", "Relaxation sparse (n=200)", elapsed, 60.0)
+        assert elapsed < 60.0
+
+    def test_purify_sparse_large(self):
+        """_purify_matrix should handle large sparse matrices without dict overhead."""
+        rng = np.random.RandomState(42)
+        n = 10_000
+        nnz = 100_000
+        rows = rng.randint(0, n, size=nnz)
+        cols = rng.randint(0, n, size=nnz)
+        vals = rng.randn(nnz)
+        # Inject some NaN/Inf
+        vals[0] = float("nan")
+        vals[1] = float("inf")
+        J = sparse.csr_matrix((vals, (rows, cols)), shape=(n, n))
+        engine = UniversalDharmaEngine(n)
+        t0 = time.time()
+        J_clean = engine._purify_matrix(J, "test_large")
+        elapsed = time.time() - t0
+        _record("Scalability", "purify (n=10K, nnz=100K)", elapsed, 30.0)
+        assert elapsed < 30.0
+        assert J_clean.shape == (n, n)
+        # Should be symmetric
+        diff = J_clean - J_clean.T
+        if diff.nnz > 0:
+            diff_coo = diff.tocoo()
+            max_diff = max(abs(float(v)) for v in diff_coo.data)
+            assert max_diff < 1e-10
+
+    def test_heartbeat_n_dims_limit(self):
+        """HeartbeatDaemon should reject n_dims > 1024."""
+        from lmm.reasoning.heartbeat import HeartbeatDaemon
+        try:
+            HeartbeatDaemon(n_dims=2000)
+            assert False, "Expected ValueError"
+        except ValueError as e:
+            assert "1024" in str(e)
+
+    def test_ising_sa_sparse_n10k(self):
+        """Ising SA at n=10,000 should work with sparse internals."""
+        rng = np.random.RandomState(42)
+        n, k = 10_000, 50
+        builder = QUBOBuilder(n_variables=n)
+        builder.add_surprise_objective(rng.rand(n), alpha=1.0)
+        builder.add_cardinality_constraint(k=k, gamma=10.0)
+        solver = ClassicalQUBOSolver(builder)
+        t0 = time.time()
+        x = solver.solve(method="ising_sa", k=k, n_iterations=500)
+        elapsed = time.time() - t0
+        n_sel = int((x > 0.5).sum())
+        _record("Scalability", "Ising SA sparse (n=10K)", elapsed, 60.0, f"sel={n_sel}")
+        assert elapsed < 60.0
+        assert n_sel == k
+
+
 class TestZBenchmarkReport:
     def test_print_summary(self):
         """Print formatted benchmark summary table."""

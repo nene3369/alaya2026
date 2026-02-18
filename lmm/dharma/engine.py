@@ -59,13 +59,14 @@ class UniversalDharmaEngine:
 
     def _purify_matrix(self, J: sparse.csr_matrix, term_name: str) -> sparse.csr_matrix:
         coo = J.tocoo()
-        rows = [int(r) for r in coo.row]
-        cols = [int(c) for c in coo.col]
-        vals = [float(v) for v in coo.data]
+        raw_rows = [int(r) for r in coo.row]
+        raw_cols = [int(c) for c in coo.col]
+        raw_vals = [float(v) for v in coo.data]
 
+        # 1. Filter: finite, off-diagonal, non-zero — accumulate into dict
         bad_count = 0
         entries: dict[tuple[int, int], float] = {}
-        for r, c, v in zip(rows, cols, vals):
+        for r, c, v in zip(raw_rows, raw_cols, raw_vals):
             if not math.isfinite(v):
                 bad_count += 1
                 continue
@@ -76,6 +77,10 @@ class UniversalDharmaEngine:
         if bad_count > 0:
             warnings.warn(f"[purify] {term_name}: {bad_count} NaN/Inf entries zeroed.")
 
+        if not entries:
+            return sparse.csr_matrix(([], ([], [])), shape=J.shape)
+
+        # 2. Check asymmetry and symmetrise
         max_asym = 0.0
         checked: set[tuple[int, int]] = set()
         for r, c in entries:
@@ -99,6 +104,7 @@ class UniversalDharmaEngine:
                     entries[(r, c)] = avg
                     entries[(c, r)] = avg
 
+        # 3. Build final sparse matrix
         fr, fc, fv = [], [], []
         for (r, c), v in entries.items():
             if v != 0.0:

@@ -62,6 +62,12 @@ def _build_hnsw(
 
 
 def _build_brute_force_sparse(data: np.ndarray, n: int, k: int) -> sparse.csr_matrix:
+    if n > 50_000:
+        import warnings
+        warnings.warn(
+            f"Brute-force k-NN with n={n:,} is O(n^2). "
+            f"Install hnswlib for O(n*log(n)): pip install hnswlib"
+        )
     norms = np.clip(np.linalg.norm(data, axis=1, keepdims=True), 1e-10, None)
     normed = data / norms
     norm_T = normed.T
