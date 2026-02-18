@@ -1648,6 +1648,7 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(_cleanup_loop())
     yield
     task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
 
 
 app = FastAPI(
@@ -1848,10 +1849,11 @@ async def descent_stream(req: DescentRequest):
 
 
 @app.post("/api/dharma/auto")
-async def dharma_auto(req: "DharmaTextRequest"):
+async def dharma_auto(req: DharmaTextRequest):
     """Auto-select best dharma engine based on text characteristics."""
     cp = _td_cosmic() if req.use_cosmic else {"alpha": 1.0, "beta": 0.5}
-    result = _td_auto(
+    result = await asyncio.to_thread(
+        _td_auto,
         req.texts, top_k=req.top_k,
         cosmic_alpha=cp["alpha"], cosmic_beta=cp["beta"],
     )
