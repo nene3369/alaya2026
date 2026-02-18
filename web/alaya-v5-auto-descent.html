@@ -336,6 +336,7 @@
     function OceanCanvas({wave,epoch,descentPhase,reasoningMode}) {
       const canvasRef=useRef(null), animRef=useRef(0), timeRef=useRef(0);
       const waveRef=useRef(wave), phaseRef=useRef(descentPhase), modeRef=useRef(reasoningMode);
+      const lastDrawRef=useRef(0);
       waveRef.current=wave; phaseRef.current=descentPhase; modeRef.current=reasoningMode;
 
       useEffect(()=>{
@@ -352,9 +353,15 @@
         resize();
         window.addEventListener('resize',resize);
 
-        const draw=()=>{
+        const draw=(now)=>{
+          // idle時は10fps、アクティブ時は60fps
+          const ph=phaseRef.current;
+          const interval=ph==='idle'?100:16;
+          if(now-lastDrawRef.current<interval){animRef.current=requestAnimationFrame(draw);return;}
+          lastDrawRef.current=now;
+
           timeRef.current+=0.01;
-          const t=timeRef.current, w=waveRef.current, ph=phaseRef.current;
+          const t=timeRef.current, w=waveRef.current;
           const mode=modeRef.current;
           ctx.clearRect(0,0,W,H);
 
@@ -398,7 +405,7 @@
           }
           animRef.current=requestAnimationFrame(draw);
         };
-        draw();
+        animRef.current=requestAnimationFrame(draw);
         return()=>{cancelAnimationFrame(animRef.current);window.removeEventListener('resize',resize);};
       },[]);
 
@@ -617,13 +624,27 @@
       return claudeKey?'claude':'gemini';
     }
 
+    // 指数バックオフリトライ (ネットワークエラーのみ、最大3回: 1s, 2s, 4s)
+    async function fetchWithRetry(url,opts,maxRetries=3){
+      let lastErr;
+      for(let i=0;i<=maxRetries;i++){
+        try{
+          const r=await fetch(url,opts);
+          if(r.ok||r.status<500)return r; // 4xx: 即失敗、5xx: リトライ
+          lastErr=new Error(`HTTP ${r.status}`);
+        }catch(e){lastErr=e;}
+        if(i<maxRetries)await new Promise(r=>setTimeout(r,1000*Math.pow(2,i)));
+      }
+      throw lastErr;
+    }
+
     // Claude API直接呼び出し
     async function callClaude(messages,system,params,apiKey){
       const body={model:'claude-sonnet-4-20250514',max_tokens:params.max_tokens,system,
         messages,temperature:params.temperature};
       if(params.top_k>0)body.top_k=params.top_k;
       if(params.top_p<1.0)body.top_p=params.top_p;
-      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
+      const r=await fetchWithRetry('https://api.anthropic.com/v1/messages',{method:'POST',
         headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
         body:JSON.stringify(body)});
       if(!r.ok)throw new Error(`Claude: ${r.status}`);
@@ -638,7 +659,7 @@
         generationConfig:{temperature:params.temperature,maxOutputTokens:params.max_tokens}};
       if(params.top_p<1.0)body.generationConfig.topP=params.top_p;
       if(params.top_k>0)body.generationConfig.topK=params.top_k;
-      const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      const r=await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
         {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       if(!r.ok)throw new Error(`Gemini: ${r.status}`);
       const d=await r.json();
@@ -697,9 +718,10 @@
 
       // バックエンドありの場合
       const sendViaBackend=async(text)=>{
+        const recentHistory=messages.slice(-20).map(m=>({role:m.role,content:m.content}));
         const resp=await fetch(`${API_BASE}/api/descent`,{method:'POST',
           headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({message:text,history:messages.map(m=>({role:m.role,content:m.content})),
+          body:JSON.stringify({message:text,history:recentHistory,
             llm_preference:llmPref,claude_api_key:claudeKey,gemini_api_key:geminiKey})});
         if(!resp.ok)throw new Error(`Server: ${resp.status}`);
         const data=await resp.json();
@@ -739,7 +761,7 @@
 
         // Phase 4: MANIFEST
         const sysP=buildModeSystemPrompt(mode,wave,complexity,fep,moon,adp);
-        const conv=messages.map(m=>({role:m.role,content:m.content}));
+        const conv=messages.slice(-20).map(m=>({role:m.role,content:m.content}));
         conv.push({role:'user',content:text});
         const response=await llmCall(conv,sysP,params,apiKey);
 
