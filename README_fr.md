@@ -6,6 +6,12 @@
 
 > [English](README_en.md) | [日本語](README.md) | [中文](README_zh.md) | [한국어](README_ko.md) | [Español](README_es.md) | [हिन्दी](README_hi.md) | [বাংলা](README_bn.md) | [தமிழ்](README_ta.md) | [తెలుగు](README_te.md) | [मराठी](README_mr.md) | [‎اردو‎](README_ur.md) | [ગુજરાતી](README_gu.md) | [ಕನ್ನಡ](README_kn.md) | [മലയാളം](README_ml.md) | [ਪੰਜਾਬੀ](README_pa.md)
 
+> **Digital Dharma OS (Alaya V5)** — Une plateforme d'optimisation consciente fusionnant
+> les mathématiques QUBO, la philosophie bouddhiste et les neurosciences du Principe d'Énergie
+> Libre (FEP) en un système vivant et auto-évolutif. Le serveur exécute une dynamique de
+> battement cardiaque continu, une sélection de contexte basée sur la mémoire et une détection
+> de longueur d'onde émotionnelle — reliant les appels LLM discrets à la cognition continue.
+
 Une bibliothèque d'optimisation QUBO classique **sans D-Wave** qui fusionne
 la surprise issue de la théorie de l'information avec des fonctions d'énergie
 inspirées de la philosophie bouddhiste, le raisonnement par le Principe d'Énergie
@@ -121,6 +127,94 @@ lmm --demo --k 10 --method sa
 # À partir d'un fichier NumPy
 lmm --input data.npy --k 5 --method greedy
 ```
+
+---
+
+## Mode Serveur (Alaya V5)
+
+Le serveur Alaya-Vijñāna v5.0 fournit une interface web avec visualisation en temps réel des longueurs d'onde émotionnelles, raisonnement FEP à 8 modes et routage automatique Claude/Gemini.
+
+### Prérequis
+
+```bash
+pip install -e ".[server]"
+```
+
+### Démarrer le serveur
+
+**PowerShell (Windows) :**
+```powershell
+.\Start-DharmaServer.ps1
+```
+
+**Python (multiplateforme) :**
+```bash
+python -m uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+Ouvrir dans le navigateur : [http://localhost:8000](http://localhost:8000)
+
+### Arrêter le serveur
+
+**Windows (batch) :**
+```batch
+.\stop-dharma-server.bat
+```
+
+**PowerShell :** Appuyer sur `Ctrl+C` dans la fenêtre exécutant `Start-DharmaServer.ps1`.
+
+**Linux/macOS :** Appuyer sur `Ctrl+C` ou exécuter :
+```bash
+kill $(cat server.pid)
+```
+
+### Points d'accès API
+
+| Point d'accès | Méthode | Description |
+|--------------|---------|-------------|
+| `/` | GET | Interface Web (frontend Alaya V5) |
+| `/api/descent` | POST | Pipeline de raisonnement principal |
+| `/api/descent/stream` | POST | Réponse SSE en streaming |
+| `/api/dharma/auto` | POST | Raisonnement Dharma avec routage automatique |
+| `/api/sense` | POST | Analyse de longueur d'onde émotionnelle |
+| `/api/status` | GET | État du système + télémétrie de battement |
+
+---
+
+## Fonctions Autonomes
+
+Le serveur comprend trois sous-systèmes autonomes qui fonctionnent en continu entre les interactions utilisateur :
+
+### Démon de Battement (Heartbeat)
+
+Une boucle d'évolution d'état FEP en temps continu maintenant un vecteur d'état à 4 dimensions `[Amour, Logique, Peur, Création]` :
+
+- **Intervalle de tick :** 100ms (actif) → 5s (inactif), ralentissement adaptatif
+- **Injection d'entropie :** Entropie matérielle via `os.urandom()` à chaque tick
+- **Adaptation des poids :** Les poids Karuna (compassion) et Metta (bienveillance) s'auto-ajustent via le suivi CV de la Voie du Milieu (CV cible = 0,5)
+- **Consolidation du sommeil :** Déclenche la relecture mémoire NREM/REM après 60s d'inactivité
+
+### Pont de Contexte (Mémoire Alaya)
+
+Remplace la troncature naïve de l'historique (`history[-20:]`) par une sélection de contexte intelligente basée sur la mémoire :
+
+- Utilise le **Modern Hopfield Network** pour le rappel depuis AlayaMemory
+- Note l'historique de conversation par similarité cosinus avec les motifs rappelés
+- Inclut toujours les 3 messages les plus récents (biais de proximité)
+- Remplit le budget restant (jusqu'à 20 messages) par score de pertinence
+
+### Émotions Sémantiques
+
+Analyse en temps réel de la longueur d'onde émotionnelle par correspondance de mots-clés sur quatre dimensions définies dans `config/semantic_emotions.json` :
+
+| Dimension | Concept Bouddhiste | Signal |
+|-----------|-------------------|--------|
+| Amour | Karuna (慈悲) | Compassion, chaleur, gratitude |
+| Logique | Hetuvidya (因明) | Analyse, raisonnement, preuve |
+| Peur | Dukkha (苦) | Anxiété, doute, souffrance |
+| Création | Sṛṣṭi (創造) | Innovation, imagination, art |
+
+Chaque mot-clé porte un poids (0,3–1,0). Le vecteur 4D résultant pilote la sélection du mode de raisonnement et l'injection d'état de battement.
 
 ---
 

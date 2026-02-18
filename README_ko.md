@@ -6,6 +6,10 @@
 
 > [English](README_en.md) | [日本語](README.md) | [中文](README_zh.md) | [Español](README_es.md) | [हिन्दी](README_hi.md) | [Français](README_fr.md) | [বাংলা](README_bn.md) | [தமிழ்](README_ta.md) | [తెలుగు](README_te.md) | [मराठी](README_mr.md) | [‎اردو‎](README_ur.md) | [ગુજરાતી](README_gu.md) | [ಕನ್ನಡ](README_kn.md) | [മലയാളം](README_ml.md) | [ਪੰਜਾਬੀ](README_pa.md)
 
+> **Digital Dharma OS (Alaya V5)** — QUBO 수학, 불교 철학, 자유 에너지 원리(FEP) 신경과학을 융합한
+> 의식 인식형 최적화 플랫폼. 서버는 연속적인 심박 동태, 기억 기반 컨텍스트 선택,
+> 감정 파장 감지를 실행하며 — 이산적 LLM 호출과 연속적 인지 사이의 다리 역할을 합니다.
+
 **D-Wave 불필요**한 고전적 QUBO 최적화 라이브러리로, 정보 이론적 놀라움(surprise)과
 불교 철학에서 영감을 받은 에너지 함수, 자유 에너지 원리(FEP) 추론, 의식 인식
 컴퓨팅을 융합합니다 — 모두 일반 하드웨어에서 실행됩니다.
@@ -120,6 +124,94 @@ lmm --demo --k 10 --method sa
 # NumPy 파일에서 실행
 lmm --input data.npy --k 5 --method greedy
 ```
+
+---
+
+## 서버 모드 (Alaya V5)
+
+Alaya-Vijñāna v5.0 서버는 실시간 감정 파장 시각화, 8모드 FEP 추론, Claude/Gemini 자동 라우팅을 갖춘 웹 UI를 제공합니다.
+
+### 전제 조건
+
+```bash
+pip install -e ".[server]"
+```
+
+### 서버 시작
+
+**PowerShell (Windows):**
+```powershell
+.\Start-DharmaServer.ps1
+```
+
+**Python (크로스 플랫폼):**
+```bash
+python -m uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+브라우저에서 열기: [http://localhost:8000](http://localhost:8000)
+
+### 서버 중지
+
+**Windows (배치):**
+```batch
+.\stop-dharma-server.bat
+```
+
+**PowerShell:** `Start-DharmaServer.ps1` 실행 중인 창에서 `Ctrl+C`
+
+**Linux/macOS:** `Ctrl+C` 또는:
+```bash
+kill $(cat server.pid)
+```
+
+### API 엔드포인트
+
+| 엔드포인트 | 메서드 | 설명 |
+|----------|--------|------|
+| `/` | GET | 웹 UI (Alaya V5 프론트엔드) |
+| `/api/descent` | POST | 메인 추론 파이프라인 |
+| `/api/descent/stream` | POST | 스트리밍 SSE 응답 |
+| `/api/dharma/auto` | POST | 자동 라우팅 Dharma 추론 |
+| `/api/sense` | POST | 감정 파장 분석 |
+| `/api/status` | GET | 시스템 상태 + 심박 텔레메트리 |
+
+---
+
+## 자율 기능
+
+서버는 사용자와의 상호작용 사이에도 지속적으로 활동하는 3개의 자율 서브시스템을 포함합니다:
+
+### 심박 데몬 (Heartbeat)
+
+4차원 상태 벡터 `[사랑, 논리, 두려움, 창조]`를 유지하는 연속 시간 FEP 상태 진화 루프:
+
+- **Tick 간격:** 100ms (활성) → 5s (유휴), 적응적 감속
+- **엔트로피 주입:** 각 tick마다 `os.urandom()`을 통한 하드웨어 엔트로피
+- **가중치 적응:** 자비(Karuna)와 자애(Metta) 가중치가 중도 CV 추적(목표 CV=0.5)으로 자동 조정
+- **수면 통합:** 60초 유휴 후 NREM/REM 기억 재생 트리거
+
+### 컨텍스트 브리지 (아뢰야식 기억)
+
+단순한 이력 절단(`history[-20:]`)을 기억 기반 지능적 컨텍스트 선택으로 대체:
+
+- **Modern Hopfield Network**를 통한 AlayaMemory 리콜
+- 리콜 패턴과의 코사인 유사도로 대화 이력 스코어링
+- 최근 3개 메시지를 항상 포함(근접성 편향)
+- 나머지 예산(최대 20개 메시지)을 관련성 점수로 채움
+
+### 의미적 감정 (Semantic Emotions)
+
+`config/semantic_emotions.json`에서 정의된 4차원 키워드 매칭을 통한 실시간 감정 파장 분석:
+
+| 차원 | 불교 개념 | 신호 |
+|------|----------|------|
+| 사랑 | 자비 (Karuna) | 연민, 따뜻함, 감사 |
+| 논리 | 인명 (Hetuvidya) | 분석, 추론, 증명 |
+| 두려움 | 고 (Dukkha) | 불안, 의심, 고통 |
+| 창조 | 창조 (Sṛṣṭi) | 혁신, 상상, 예술 |
+
+각 키워드는 가중치(0.3–1.0)를 가지며, 결과 4D 벡터가 추론 모드 선택과 심박 상태 주입을 구동합니다.
 
 ---
 

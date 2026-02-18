@@ -6,6 +6,10 @@
 
 > [English](README_en.md) | [日本語](README.md) | [한국어](README_ko.md) | [Español](README_es.md) | [हिन्दी](README_hi.md) | [Français](README_fr.md) | [বাংলা](README_bn.md) | [தமிழ்](README_ta.md) | [తెలుగు](README_te.md) | [मराठी](README_mr.md) | [‎اردو‎](README_ur.md) | [ગુજરાતી](README_gu.md) | [ಕನ್ನಡ](README_kn.md) | [മലയാളം](README_ml.md) | [ਪੰਜਾਬੀ](README_pa.md)
 
+> **Digital Dharma OS (Alaya V5)** — 融合 QUBO 数学、佛教哲学与自由能原理（FEP）神经科学的
+> 意识感知型优化平台。服务器运行连续心跳动态、记忆驱动上下文选择和情感波长感知
+> —— 在离散 LLM 调用与连续认知之间架起桥梁的"活系统"。
+
 一个**无需 D-Wave** 的经典 QUBO 优化库，将信息论中的惊异度与受佛教哲学启发的能量函数、自由能原理（FEP）推理以及意识感知计算相融合——所有这些均可在通用硬件上运行。
 
 ---
@@ -118,6 +122,94 @@ lmm --demo --k 10 --method sa
 # 从 NumPy 文件加载
 lmm --input data.npy --k 5 --method greedy
 ```
+
+---
+
+## 服务器模式 (Alaya V5)
+
+Alaya-Vijñāna v5.0 服务器提供具有实时情感波长可视化、8 模式 FEP 推理和 Claude/Gemini 自动路由的 Web UI。
+
+### 前置条件
+
+```bash
+pip install -e ".[server]"
+```
+
+### 启动服务器
+
+**PowerShell (Windows):**
+```powershell
+.\Start-DharmaServer.ps1
+```
+
+**Python (跨平台):**
+```bash
+python -m uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+在浏览器中打开: [http://localhost:8000](http://localhost:8000)
+
+### 停止服务器
+
+**Windows (批处理):**
+```batch
+.\stop-dharma-server.bat
+```
+
+**PowerShell:** 在运行 `Start-DharmaServer.ps1` 的窗口中按 `Ctrl+C`
+
+**Linux/macOS:** 按 `Ctrl+C` 或运行:
+```bash
+kill $(cat server.pid)
+```
+
+### API 端点
+
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `/` | GET | Web UI (Alaya V5 前端) |
+| `/api/descent` | POST | 主推理管线 |
+| `/api/descent/stream` | POST | 流式 SSE 响应 |
+| `/api/dharma/auto` | POST | 自动路由 Dharma 推理 |
+| `/api/sense` | POST | 情感波长分析 |
+| `/api/status` | GET | 系统状态 + 心跳遥测 |
+
+---
+
+## 自主功能
+
+服务器包含三个在用户交互间隙持续运行的自主子系统:
+
+### 心跳守护进程 (Heartbeat)
+
+维护 4 维状态向量 `[爱, 逻辑, 恐惧, 创造]` 的连续时间 FEP 状态演化循环:
+
+- **Tick 间隔:** 100ms（活跃）→ 5s（空闲），自适应减速
+- **熵注入:** 每次 tick 通过 `os.urandom()` 注入硬件熵
+- **权重自适应:** 悲悯（Karuna）和慈爱（Metta）权重通过中道 CV 跟踪（目标 CV=0.5）自动调节
+- **睡眠巩固:** 空闲 60 秒后触发 NREM/REM 记忆重放
+
+### 上下文桥接 (阿赖耶识记忆)
+
+用记忆驱动的智能上下文选择替代朴素的历史截断 (`history[-20:]`):
+
+- 通过 **Modern Hopfield Network** 从 AlayaMemory 进行回忆
+- 以余弦相似度对对话历史进行评分
+- 始终包含最近 3 条消息（近因偏差）
+- 以相关性分数填充剩余配额（最多 20 条消息）
+
+### 语义情感 (Semantic Emotions)
+
+通过 `config/semantic_emotions.json` 中定义的 4 维关键词匹配进行实时情感波长分析:
+
+| 维度 | 佛教概念 | 信号 |
+|------|---------|------|
+| 爱 | 悲 (Karuna) | 慈悲、温暖、感恩 |
+| 逻辑 | 因明 (Hetuvidya) | 分析、推理、证明 |
+| 恐惧 | 苦 (Dukkha) | 焦虑、怀疑、痛苦 |
+| 创造 | 创造 (Sṛṣṭi) | 创新、想象、艺术 |
+
+每个关键词带有权重（0.3–1.0），所得 4D 向量驱动推理模式选择和心跳状态注入。
 
 ---
 
