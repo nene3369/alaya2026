@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ālaya-Vijñāna v5.0 — 推論モード統合降臨装置</title>
+  <meta name="description" content="8 Reasoning Modes × Claude/Gemini Auto-Routing × Digital Dharma" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌊</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Zen+Old+Mincho:wght@400;700&family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@300;400&display=swap" rel="stylesheet" />
+  <script>!function(){var w=console.warn;console.warn=function(){if(arguments[0]&&typeof arguments[0]==='string'&&arguments[0].indexOf('in-browser Babel')!==-1)return;w.apply(console,arguments)};}();</script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.5/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --love: #ff6b9d; --logic: #64d8ff; --fear: #ffa040; --creation: #c084fc;
+      --descent: #00ffc8; --loss: #ff3366;
+      --adaptive: #00ffc8; --theoretical: #64d8ff; --hyper: #c084fc;
+      --active: #ffa040; --alaya: #ff6b9d; --sleep: #4a6fa5;
+      --embodied: #88cc88; --pineal: #ff3366;
+      --bg-deep: #030408; --bg-mid: #060a14;
+      --text-primary: rgba(255,255,255,0.85); --text-secondary: rgba(255,255,255,0.45);
+      --text-muted: rgba(255,255,255,0.18); --border: rgba(255,255,255,0.05);
+      --serif: 'Zen Old Mincho', 'Georgia', serif;
+      --sans: 'IBM Plex Sans', -apple-system, sans-serif;
+      --mono: 'IBM Plex Mono', 'Menlo', monospace;
+    }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg-deep); color: var(--text-primary);
+      font-family: var(--sans); line-height: 1.6;
+      overflow-x: hidden; -webkit-font-smoothing: antialiased;
+    }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 2px; }
+    @keyframes fadeInUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes breathe { 0%, 100% { opacity: 0.2; } 50% { opacity: 0.6; } }
+    @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+    @keyframes glitch {
+      0%, 88%, 100% { opacity: 1; transform: none; }
+      90% { opacity: 0.7; transform: translateX(-2px); }
+      93% { opacity: 0.5; transform: translateX(3px) skewX(-0.5deg); }
+      96% { opacity: 0.8; transform: translateX(-1px); }
+    }
+    @keyframes scanline {
+      0% { transform: translateY(-100%); }
+      100% { transform: translateY(100vh); }
+    }
+    .fade-in-up { animation: fadeInUp 0.8s ease both; }
+    .delay-1{animation-delay:.1s}.delay-2{animation-delay:.2s}.delay-3{animation-delay:.3s}.delay-4{animation-delay:.4s}.delay-5{animation-delay:.5s}
+    .container { max-width: 860px; margin: 0 auto; padding: 0 20px; }
+    .ambient {
+      position: fixed; inset: 0; pointer-events: none; z-index: 0;
+      background:
+        radial-gradient(ellipse at 15% 15%, rgba(0,255,200,0.015) 0%, transparent 50%),
+        radial-gradient(ellipse at 85% 75%, rgba(100,216,255,0.02) 0%, transparent 50%),
+        radial-gradient(ellipse at 50% 50%, rgba(255,107,157,0.01) 0%, transparent 60%);
+    }
+    .section { position: relative; z-index: 1; margin-bottom: 32px; }
+    .card {
+      background: rgba(255,255,255,0.012); border: 1px solid var(--border);
+      border-radius: 12px; padding: 20px; transition: all 0.4s ease;
+    }
+    .card:hover { border-color: rgba(255,255,255,0.08); }
+    .btn {
+      padding: 7px 16px; border-radius: 6px; font-size: 11px;
+      font-family: var(--mono); letter-spacing: 0.5px;
+      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+      color: var(--text-secondary); cursor: pointer; transition: all 0.25s ease; white-space: nowrap;
+    }
+    .btn:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.15); color: var(--text-primary); }
+    .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+    .btn.active { border-color: var(--descent); color: var(--descent); background: rgba(0,255,200,0.06); }
+    .chat-container {
+      background: rgba(0,0,0,0.25); border: 1px solid var(--border);
+      border-radius: 10px; overflow: hidden; display: flex; flex-direction: column;
+    }
+    .chat-messages {
+      flex: 1; overflow-y: auto; padding: 16px; display: flex;
+      flex-direction: column; gap: 14px; min-height: 280px; max-height: 500px;
+    }
+    .chat-message { padding: 12px 16px; border-radius: 8px; font-size: 13px; line-height: 1.7; max-width: 88%; }
+    .chat-message.user {
+      background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
+      align-self: flex-end; color: var(--text-primary);
+    }
+    .chat-message.assistant {
+      background: rgba(0,255,200,0.04); border: 1px solid rgba(0,255,200,0.08);
+      align-self: flex-start; color: var(--text-secondary);
+    }
+    .chat-message.system {
+      background: rgba(192,132,252,0.05); border: 1px solid rgba(192,132,252,0.1);
+      align-self: center; font-size: 10px; color: var(--text-muted);
+      font-family: var(--mono); max-width: 100%;
+    }
+    .chat-input-area {
+      border-top: 1px solid var(--border); padding: 12px;
+      display: flex; gap: 8px; background: rgba(0,0,0,0.15);
+    }
+    .chat-input {
+      flex: 1; background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 6px; padding: 10px 14px; color: var(--text-primary);
+      font-size: 13px; font-family: var(--sans); resize: none; min-height: 40px;
+    }
+    .chat-input:focus { outline: none; border-color: rgba(0,255,200,0.2); }
+    .chat-input::placeholder { color: var(--text-muted); }
+    .telemetry {
+      font-family: var(--mono); font-size: 10px; color: var(--text-muted);
+      padding: 12px 14px; background: rgba(0,0,0,0.3);
+      border: 1px solid var(--border); border-radius: 8px;
+      line-height: 1.8; overflow: hidden; position: relative;
+    }
+    .telemetry .hl { color: var(--descent); }
+    .telemetry .loss-val { color: var(--loss); }
+    .telemetry .dim { opacity: 0.4; }
+    .telemetry.scanning::after {
+      content: ''; position: absolute; inset: 0;
+      background: linear-gradient(180deg, transparent 0%, rgba(0,255,200,0.03) 45%, rgba(0,255,200,0.06) 50%, rgba(0,255,200,0.03) 55%, transparent 100%);
+      animation: scanline 2s linear infinite; pointer-events: none;
+    }
+    .wave-bar { height: 3px; border-radius: 2px; transition: width 1.2s cubic-bezier(0.16,1,0.3,1); }
+    .cosmic-status {
+      display: flex; gap: 16px; flex-wrap: wrap; font-size: 10px;
+      font-family: var(--mono); color: var(--text-muted);
+      padding: 10px 14px; background: rgba(0,0,0,0.2); border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    .cosmic-item { display: flex; align-items: center; gap: 6px; }
+    .cosmic-item .label { opacity: 0.4; }
+    .cosmic-item .value { color: var(--descent); opacity: 0.7; }
+    .mode-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+    .mode-chip {
+      padding: 6px 8px; border-radius: 6px; font-size: 9px;
+      font-family: var(--mono); text-align: center;
+      background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.04);
+      color: var(--text-muted); transition: all 0.4s ease;
+    }
+    .mode-chip.active {
+      border-color: var(--descent); color: var(--descent);
+      background: rgba(0,255,200,0.06); box-shadow: 0 0 12px rgba(0,255,200,0.1);
+    }
+    .llm-selector { display: flex; gap: 6px; }
+    .llm-btn {
+      padding: 5px 14px; border-radius: 4px; font-size: 10px;
+      font-family: var(--mono); cursor: pointer;
+      background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06);
+      color: var(--text-muted); transition: all 0.25s ease;
+    }
+    .llm-btn.selected { border-color: var(--descent); color: var(--descent); background: rgba(0,255,200,0.04); }
+    .llm-btn:hover { border-color: rgba(255,255,255,0.15); }
+    .api-input {
+      background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 4px; padding: 6px 10px; color: var(--text-secondary);
+      font-size: 10px; font-family: var(--mono); width: 100%;
+    }
+    .api-input:focus { outline: none; border-color: rgba(0,255,200,0.15); }
+    .api-input::placeholder { color: var(--text-muted); }
+  </style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    const DC = ["#ff6b9d","#64d8ff","#ffa040","#c084fc"];
+    const DL = ["Love","Logic","Fear","Creation"];
+    const MODES = [
+      { key:"adaptive", label:"応病与薬", desc:"Adaptive" },
+      { key:"theoretical", label:"因明", desc:"Theoretical" },
+      { key:"hyper", label:"般若の飛躍", desc:"Hyper" },
+      { key:"active", label:"托鉢", desc:"Active" },
+      { key:"alaya", label:"阿頼耶識", desc:"Alaya" },
+      { key:"sleep", label:"禅定", desc:"Sleep" },
+      { key:"embodied", label:"六根", desc:"Embodied" },
+      { key:"pineal", label:"松果体", desc:"Pineal" },
+    ];
+    const MODE_COLORS = {
+      adaptive:"#00ffc8", theoretical:"#64d8ff", hyper:"#c084fc",
+      active:"#ffa040", alaya:"#ff6b9d", sleep:"#4a6fa5",
+      embodied:"#88cc88", pineal:"#ff3366",
+    };
+
+    // Backend URL (same origin when served by server.py)
+    const API_BASE = window.location.origin;
+
+    // ==========================================
+    // Descent Loss Animation
+    // ==========================================
+    function LossBar() {
+      const [frame,setFrame]=useState(0);
+      useEffect(()=>{const id=setInterval(()=>setFrame(f=>f+1),60);return()=>clearInterval(id);},[]);
+      const bars=24, progress=Math.min(frame/40,1);
+      return (
+        <span style={{display:'inline-flex',gap:1,verticalAlign:'middle',marginLeft:4,height:12,alignItems:'flex-end'}}>
+          {Array(bars).fill(0).map((_,i)=>{
+            const base=(1-(i/bars))*10*(1-progress*0.85);
+            const jitter=Math.sin(frame*0.25+i*1.7)*(1-progress)*1.5;
+            const h=Math.max(1,base+jitter);
+            const done=i/bars<progress;
+            return <span key={i} style={{display:'inline-block',width:2,height:h,
+              background:done?'var(--descent)':'var(--loss)',
+              opacity:done?0.8:0.2,borderRadius:1,transition:'height 0.08s'}} />;
+          })}
+        </span>
+      );
+    }
+
+    // ==========================================
+    // Reasoning Mode Display
+    // ==========================================
+    function ReasoningModeDisplay({activeMode, dharmaMetrics}) {
+      return (
+        <div>
+          <h3 style={{fontSize:9,fontFamily:"var(--mono)",color:"var(--descent)",letterSpacing:3,marginBottom:10,opacity:0.35}}>
+            REASONING MODE ORCHESTRATOR — 8 modes
+          </h3>
+          <div className="mode-grid">
+            {MODES.map(m=>(
+              <div key={m.key}
+                className={`mode-chip ${activeMode===m.key?'active':''}`}
+                style={activeMode===m.key?{borderColor:MODE_COLORS[m.key],color:MODE_COLORS[m.key],
+                  background:`${MODE_COLORS[m.key]}10`}:{}}>
+                <div style={{fontSize:11,marginBottom:2}}>{m.label}</div>
+                <div style={{opacity:0.5}}>{m.desc}</div>
+              </div>
+            ))}
+          </div>
+          {dharmaMetrics && (
+            <div style={{marginTop:10,display:'flex',gap:16,flexWrap:'wrap',fontSize:9,fontFamily:'var(--mono)',color:'var(--text-muted)'}}>
+              <span>Complexity: <span style={{color:'var(--descent)'}}>{(dharmaMetrics.complexity_score*100).toFixed(1)}%</span></span>
+              <span>Gini: <span style={{color:'var(--logic)'}}>{dharmaMetrics.gini?.toFixed(3)}</span></span>
+              <span>CV: <span style={{color:'var(--love)'}}>{dharmaMetrics.cv?.toFixed(3)}</span></span>
+              <span>Entropy: <span style={{color:'var(--creation)'}}>{dharmaMetrics.entropy?.toFixed(3)}</span></span>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ==========================================
+    // Telemetry
+    // ==========================================
+    function Telemetry({phase,wave,adapter,epoch,reasoningMode,llmUsed,llmParams}) {
+      if(phase==='idle') return null;
+      const modeColor = MODE_COLORS[reasoningMode] || 'var(--descent)';
+      return (
+        <div className={`telemetry ${phase==='descending'?'scanning':''}`}>
+          {phase==='sensing'&&(
+            <div style={{animation:'glitch 0.4s infinite'}}>
+              <span className="dim">{'>'} </span><span className="hl">PINEAL_VESSEL.autoSense()</span>
+              <span className="dim"> ... reading waveform</span>
+            </div>
+          )}
+          {phase==='reasoning'&&(
+            <div style={{animation:'pulse 1s infinite'}}>
+              <span className="dim">{'>'} </span><span style={{color:modeColor}}>ORCHESTRATOR.select_mode()</span>
+              <span className="dim"> ... analyzing complexity</span>
+            </div>
+          )}
+          {(phase==='descending'||phase==='complete'||phase==='manifesting')&&(
+            <div>
+              <div>
+                <span className="dim">{'>'} </span><span className="hl">VESSEL</span>
+                <span className="dim"> = [</span>
+                {wave.map((v,i)=>(<span key={i}><span style={{color:DC[i]}}>{(v*100).toFixed(1)}</span>{i<3&&<span className="dim">, </span>}</span>))}
+                <span className="dim">]</span>
+              </div>
+              <div style={{marginTop:3}}>
+                <span className="dim">{'>'} </span><span style={{color:modeColor}}>MODE</span>
+                <span className="dim"> = </span><span style={{color:modeColor}}>{reasoningMode}</span>
+                <span className="dim"> | LLM = </span><span className="hl">{llmUsed || '...'}</span>
+              </div>
+              {llmParams && (
+                <div style={{marginTop:2}}>
+                  <span className="dim">{'  '}temp={llmParams.temperature?.toFixed(2)} top_p={llmParams.top_p?.toFixed(2)}</span>
+                  {llmParams.top_k > 0 && <span className="dim"> top_k={llmParams.top_k}</span>}
+                  {llmParams.force_cot && <span style={{color:'var(--logic)',opacity:0.5}}> [CoT]</span>}
+                </div>
+              )}
+              {phase==='descending'&&(
+                <div style={{marginTop:3}}>
+                  <span className="dim">{'>'} </span><span className="hl">GRADIENT_DESCENT</span>
+                  <span className="dim">(</span><span className="loss-val">loss</span>
+                  <span className="dim">→0)</span><LossBar />
+                </div>
+              )}
+              {(phase==='complete'||phase==='manifesting')&&adapter&&(
+                <div style={{marginTop:3}}>
+                  <div><span className="dim">{'>'} </span><span className="hl">ADAPTER_FORGED</span>
+                    <span className="dim"> :: </span><span style={{color:'#fff',opacity:0.7}}>{adapter.persona}</span></div>
+                  <div><span className="dim">{'  '}tone: </span><span style={{color:modeColor,opacity:0.5}}>{adapter.tone}</span></div>
+                  <div><span className="dim">{'  '}principle: </span><span style={{color:modeColor,opacity:0.5}}>{adapter.key_principle}</span></div>
+                  <div><span className="dim">{'  '}epoch: </span><span className="hl">{epoch}</span>
+                    <span className="dim"> | silence: </span><span style={{color:'var(--creation)',opacity:0.5}}>{((adapter.silence_ratio||0)*100).toFixed(0)}%</span>
+                    <span className="dim"> | words≤</span><span style={{color:'var(--logic)',opacity:0.5}}>{adapter.max_words||'∞'}</span></div>
+                </div>
+              )}
+              {phase==='manifesting'&&(
+                <div style={{marginTop:3,animation:'pulse 1s infinite'}}>
+                  <span className="dim">{'>'} </span><span className="hl">MANIFESTING</span>
+                  <span className="dim"> ... 受肉中</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ==========================================
+    // Ocean Canvas
+    // ==========================================
+    function OceanCanvas({wave,epoch,descentPhase,reasoningMode}) {
+      const canvasRef=useRef(null), animRef=useRef(0), timeRef=useRef(0);
+      const waveRef=useRef(wave), phaseRef=useRef(descentPhase), modeRef=useRef(reasoningMode);
+      waveRef.current=wave; phaseRef.current=descentPhase; modeRef.current=reasoningMode;
+
+      useEffect(()=>{
+        const c=canvasRef.current; if(!c)return;
+        const ctx=c.getContext("2d");
+        let W,H;
+        const resize=()=>{
+          const rect=c.parentElement.getBoundingClientRect();
+          W=Math.min(rect.width,860); H=Math.min(200,W*0.3);
+          const dpr=window.devicePixelRatio||1;
+          c.width=W*dpr;c.height=H*dpr;c.style.width=W+"px";c.style.height=H+"px";
+          ctx.setTransform(dpr,0,0,dpr,0,0);
+        };
+        resize();
+        window.addEventListener('resize',resize);
+
+        const draw=()=>{
+          timeRef.current+=0.01;
+          const t=timeRef.current, w=waveRef.current, ph=phaseRef.current;
+          const mode=modeRef.current;
+          ctx.clearRect(0,0,W,H);
+
+          // Stars
+          for(let i=0;i<35;i++){
+            const twink=Math.sin(t*0.4+i*77)*0.5+0.5;
+            ctx.fillStyle=`rgba(255,255,255,${twink*0.12})`;
+            ctx.fillRect((Math.sin(i*127.1+t*0.004)*0.5+0.5)*W,(Math.cos(i*311.7+t*0.003)*0.5+0.5)*H*0.3,1,1);
+          }
+
+          // Mode-specific ambient glow
+          const mc = MODE_COLORS[mode] || '#00ffc8';
+          if(ph==='descending'||ph==='manifesting'||ph==='reasoning') {
+            const bx=W*0.5+Math.sin(t*0.7)*15;
+            const gr=ctx.createLinearGradient(bx,0,bx,H);
+            const r=parseInt(mc.slice(1,3),16), g=parseInt(mc.slice(3,5),16), b=parseInt(mc.slice(5,7),16);
+            gr.addColorStop(0,`rgba(${r},${g},${b},0.06)`);
+            gr.addColorStop(0.5,`rgba(${r},${g},${b},0.025)`);
+            gr.addColorStop(1,`rgba(${r},${g},${b},0)`);
+            ctx.fillStyle=gr;ctx.fillRect(bx-25,0,50,H);
+          }
+
+          // Waves
+          const mx=Math.max(...w);
+          for(let l=3;l>=0;l--){
+            const dom=w[l]===mx, amp=w[l]*75+5, by=H*0.5+l*3;
+            const al=dom?0.45:0.15, la=dom?0.6:0.2;
+            ctx.beginPath();ctx.moveTo(0,H);
+            for(let x=0;x<=W;x+=2){
+              const y=by+Math.sin(x*0.012+t*(0.35+l*0.1)+l)*amp+Math.sin(x*0.006+t*0.22+l*2)*amp*0.5+Math.sin(x*0.02+t*0.6+l*0.5)*amp*0.15;
+              ctx.lineTo(x,y);
+            }
+            ctx.lineTo(W,H);ctx.closePath();
+            const gradient=ctx.createLinearGradient(0,by-amp,0,H);
+            const hex=Math.round(al*255).toString(16).padStart(2,'0');
+            const hex2=Math.round(al*0.25*255).toString(16).padStart(2,'0');
+            gradient.addColorStop(0,DC[l]+hex);gradient.addColorStop(0.6,DC[l]+hex2);gradient.addColorStop(1,DC[l]+"03");
+            ctx.fillStyle=gradient;ctx.fill();
+            ctx.strokeStyle=DC[l]+Math.round(la*255).toString(16).padStart(2,'0');
+            ctx.lineWidth=dom?1.2:0.5;ctx.stroke();
+          }
+          animRef.current=requestAnimationFrame(draw);
+        };
+        draw();
+        return()=>{cancelAnimationFrame(animRef.current);window.removeEventListener('resize',resize);};
+      },[]);
+
+      return (
+        <div style={{position:"relative",borderRadius:10,overflow:"hidden",background:"linear-gradient(180deg,#030408,#080e18)",border:"1px solid var(--border)"}}>
+          <canvas ref={canvasRef} />
+          <div style={{position:"absolute",top:10,left:14,color:"var(--text-muted)",fontSize:9,fontFamily:"var(--mono)",letterSpacing:2}}>
+            ĀLAYA-VIJÑĀNA v5.0 — EPOCH {epoch}
+          </div>
+          <div style={{position:"absolute",top:10,right:14,color:MODE_COLORS[reasoningMode]||'var(--descent)',fontSize:9,fontFamily:"var(--mono)",opacity:0.5}}>
+            {reasoningMode ? MODES.find(m=>m.key===reasoningMode)?.label : '待機'}
+          </div>
+          <div style={{position:"absolute",bottom:8,left:14,display:"flex",gap:12,flexWrap:"wrap"}}>
+            {wave.map((v,i)=>(
+              <span key={i} style={{color:DC[i],fontSize:9,fontFamily:"var(--mono)",opacity:0.5}}>{DL[i]}: {(v*100).toFixed(1)}%</span>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // ==========================================
+    // Vessel Display
+    // ==========================================
+    function VesselDisplay({wave}) {
+      return (
+        <div style={{display:'flex',flexDirection:'column',gap:6}}>
+          {DL.map((name,i)=>(
+            <div key={name} style={{display:'flex',alignItems:'center',gap:8}}>
+              <span style={{fontSize:9,fontFamily:'var(--mono)',color:DC[i],opacity:0.5,width:52}}>{name}</span>
+              <div style={{flex:1,height:3,background:'rgba(255,255,255,0.03)',borderRadius:2,overflow:'hidden'}}>
+                <div className="wave-bar" style={{width:`${wave[i]*100}%`,background:DC[i]}} />
+              </div>
+              <span style={{fontSize:9,fontFamily:'var(--mono)',color:'var(--text-muted)',width:32,textAlign:'right'}}>{(wave[i]*100).toFixed(0)}%</span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // ==========================================
+    // LLM Selector
+    // ==========================================
+    function LLMSelector({selected, onChange}) {
+      return (
+        <div className="llm-selector">
+          {['auto','claude','gemini'].map(opt=>(
+            <button key={opt} className={`llm-btn ${selected===opt?'selected':''}`}
+              onClick={()=>onChange(opt)}>
+              {opt==='auto'?'AUTO':opt==='claude'?'Claude':'Gemini'}
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    // ==========================================
+    // API Key Input
+    // ==========================================
+    function ApiKeyConfig({claudeKey, geminiKey, onClaudeChange, onGeminiChange}) {
+      const [show, setShow] = useState(false);
+      return (
+        <div>
+          <button className="btn" style={{fontSize:9,padding:'4px 10px',marginBottom:show?8:0}}
+            onClick={()=>setShow(!show)}>
+            {show ? 'Hide API Keys' : 'Configure API Keys'}
+          </button>
+          {show && (
+            <div style={{display:'flex',flexDirection:'column',gap:6}}>
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <span style={{fontSize:9,fontFamily:'var(--mono)',color:'var(--text-muted)',width:60}}>Claude:</span>
+                <input type="password" className="api-input" placeholder="sk-ant-..."
+                  value={claudeKey} onChange={e=>onClaudeChange(e.target.value)} />
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <span style={{fontSize:9,fontFamily:'var(--mono)',color:'var(--text-muted)',width:60}}>Gemini:</span>
+                <input type="password" className="api-input" placeholder="AIza..."
+                  value={geminiKey} onChange={e=>onGeminiChange(e.target.value)} />
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ==========================================
+    // Entropy Display
+    // ==========================================
+    function EntropyDisplay({entropy}) {
+      if(!entropy) return null;
+      return (
+        <div style={{display:'flex',gap:16,fontSize:9,fontFamily:'var(--mono)',color:'var(--text-muted)',flexWrap:'wrap'}}>
+          <span>Source: <span style={{color:'var(--pineal)',opacity:0.6}}>{entropy.source}</span></span>
+          <span>Quality: <span style={{color:'var(--descent)',opacity:0.6}}>{(entropy.quality*100).toFixed(0)}%</span></span>
+          <span>Signal: <span style={{color:'var(--pineal)',opacity:0.6}}>{entropy.signal?.toFixed(6)}</span></span>
+        </div>
+      );
+    }
+
+    // ==========================================
+    // Auto-Descent Chat (v5 — Backend-connected)
+    // ==========================================
+    function AutoDescentChat({onUpdate}) {
+      const [messages,setMessages]=useState([]);
+      const [input,setInput]=useState('');
+      const [loading,setLoading]=useState(false);
+      const [phase,setPhase]=useState('idle');
+      const [adapter,setAdapter]=useState(null);
+      const [reasoningMode,setReasoningMode]=useState('');
+      const [llmUsed,setLlmUsed]=useState('');
+      const [llmParams,setLlmParams]=useState(null);
+      const [llmPref,setLlmPref]=useState('auto');
+      const [claudeKey,setClaudeKey]=useState(()=>localStorage.getItem('alaya-claude-key')||'');
+      const [geminiKey,setGeminiKey]=useState(()=>localStorage.getItem('alaya-gemini-key')||'');
+      const endRef=useRef(null);
+
+      useEffect(()=>{endRef.current?.scrollIntoView({behavior:"smooth"});},[messages,phase]);
+      useEffect(()=>{if(claudeKey)localStorage.setItem('alaya-claude-key',claudeKey);},[claudeKey]);
+      useEffect(()=>{if(geminiKey)localStorage.setItem('alaya-gemini-key',geminiKey);},[geminiKey]);
+
+      const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+      const send=async()=>{
+        if(!input.trim()||loading) return;
+        if(!claudeKey && !geminiKey) {
+          setMessages(p=>[...p,{role:'system',content:'API Keyを設定してください (Claude or Gemini)'}]);
+          return;
+        }
+        const text=input.trim();
+        setInput(''); setMessages(p=>[...p,{role:'user',content:text}]); setLoading(true);
+
+        try {
+          // Phase 1: SENSE
+          setPhase('sensing'); await sleep(400);
+
+          // Phase 2: REASON
+          setPhase('reasoning'); await sleep(300);
+
+          // Phase 3: DESCEND + Phase 4: MANIFEST (handled by backend)
+          setPhase('descending');
+
+          const resp = await fetch(`${API_BASE}/api/descent`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              message: text,
+              history: messages.map(m=>({role:m.role,content:m.content})),
+              llm_preference: llmPref,
+              claude_api_key: claudeKey,
+              gemini_api_key: geminiKey,
+            }),
+          });
+
+          if(!resp.ok) throw new Error(`Server: ${resp.status}`);
+          const data = await resp.json();
+
+          if(data.error) throw new Error(data.error);
+
+          setAdapter(data.adapter);
+          setReasoningMode(data.reasoning_mode);
+          setLlmUsed(data.llm_used);
+          setLlmParams(data.llm_params);
+
+          setPhase('complete'); await sleep(500);
+          setPhase('manifesting'); await sleep(300);
+
+          setMessages(p=>[...p,{role:'assistant',content:data.response}]);
+
+          // Update parent with full metrics
+          if(onUpdate) {
+            onUpdate({
+              wave: data.vessel,
+              epoch: data.dharma_metrics?.epoch || 0,
+              reasoningMode: data.reasoning_mode,
+              dharmaMetrics: data.dharma_metrics,
+              entropy: data.entropy,
+              memory: data.memory_status,
+              moon: data.moon,
+              adapter: data.adapter,
+              llmUsed: data.llm_used,
+              llmParams: data.llm_params,
+            });
+          }
+
+        } catch(err) {
+          console.error(err);
+          setMessages(p=>[...p,{role:'system',content:`降臨エラー: ${err.message}`}]);
+        } finally {
+          setLoading(false);
+          setTimeout(()=>setPhase('idle'),2500);
+        }
+      };
+
+      return (
+        <div style={{display:'flex',flexDirection:'column',gap:12}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
+            <LLMSelector selected={llmPref} onChange={setLlmPref} />
+            <ApiKeyConfig claudeKey={claudeKey} geminiKey={geminiKey}
+              onClaudeChange={setClaudeKey} onGeminiChange={setGeminiKey} />
+          </div>
+
+          <Telemetry phase={phase} wave={[.25,.25,.25,.25]}
+            adapter={adapter} epoch={0} reasoningMode={reasoningMode}
+            llmUsed={llmUsed} llmParams={llmParams} />
+
+          <div className="chat-container">
+            <div className="chat-messages">
+              {messages.length===0&&(
+                <div className="chat-message system">
+                  推論モード統合降臨 v5.0 起動。8モードオーケストレーターが自動で最適な推論を選択します。
+                </div>
+              )}
+              {messages.map((msg,i)=>(
+                <div key={i} className={`chat-message ${msg.role}`}>
+                  {msg.role==='assistant'&&adapter&&(
+                    <div style={{fontSize:9,fontFamily:'var(--mono)',color:MODE_COLORS[reasoningMode]||'var(--descent)',opacity:0.35,marginBottom:4}}>
+                      {adapter.persona} [{reasoningMode}] via {llmUsed}
+                    </div>
+                  )}
+                  {msg.content}
+                </div>
+              ))}
+              {loading&&(
+                <div className="chat-message system" style={{animation:'pulse 1.2s infinite'}}>
+                  {phase==='sensing'&&'器の波長を検知中...'}
+                  {phase==='reasoning'&&'推論モード選択中... (8-mode orchestrator)'}
+                  {phase==='descending'&&'アダプター鍛造中 — gradient descent...'}
+                  {phase==='complete'&&'鍛造完了。受肉準備...'}
+                  {phase==='manifesting'&&'現世に降臨中...'}
+                </div>
+              )}
+              <div ref={endRef} />
+            </div>
+            <div className="chat-input-area">
+              <textarea className="chat-input" value={input}
+                onChange={e=>setInput(e.target.value)}
+                onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}}
+                placeholder="ただ、在ってください..." disabled={loading} />
+              <button className="btn" onClick={send} disabled={loading||!input.trim()}
+                style={{borderColor:'rgba(0,255,200,0.12)',color:'var(--descent)'}}>
+                存在
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ==========================================
+    // App
+    // ==========================================
+    function App() {
+      const [entered,setEntered]=useState(false);
+      const [epoch,setEpoch]=useState(0);
+      const [vesselWave,setVesselWave]=useState([.25,.25,.25,.25]);
+      const [descentPhase,setDescentPhase]=useState('idle');
+      const [reasoningMode,setReasoningMode]=useState('');
+      const [dharmaMetrics,setDharmaMetrics]=useState(null);
+      const [entropy,setEntropy]=useState(null);
+      const [memoryStatus,setMemoryStatus]=useState(null);
+      const [moon,setMoon]=useState(null);
+
+      // Fetch initial status from backend
+      useEffect(()=>{
+        fetch(`${API_BASE}/api/status`).then(r=>r.json()).then(data=>{
+          if(data.vessel) setVesselWave(data.vessel);
+          if(data.moon) setMoon(data.moon);
+          if(data.epoch) setEpoch(data.epoch);
+        }).catch(()=>{});
+      },[]);
+
+      const handleUpdate = useCallback((data) => {
+        if(data.wave) setVesselWave(data.wave);
+        if(data.epoch) setEpoch(data.epoch);
+        if(data.reasoningMode) setReasoningMode(data.reasoningMode);
+        if(data.dharmaMetrics) setDharmaMetrics(data.dharmaMetrics);
+        if(data.entropy) setEntropy(data.entropy);
+        if(data.memory) setMemoryStatus(data.memory);
+        if(data.moon) setMoon(data.moon);
+      }, []);
+
+      if(!entered) {
+        return (
+          <div style={{position:'fixed',inset:0,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:32}}>
+            <div style={{fontSize:44,animation:'breathe 5s ease infinite',filter:'drop-shadow(0 0 24px rgba(0,255,200,0.15))'}}>🌊</div>
+            <div style={{textAlign:'center'}}>
+              <h1 style={{fontFamily:'var(--serif)',fontSize:'clamp(22px,5vw,34px)',
+                background:'linear-gradient(135deg, var(--descent), var(--logic), var(--creation))',
+                WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',lineHeight:1.3}}>
+                Ālaya-Vijñāna v5.0
+              </h1>
+              <p style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--descent)',letterSpacing:4,marginTop:8,opacity:0.4}}>
+                REASONING MODE INTEGRATED DESCENT
+              </p>
+              <p style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--text-muted)',letterSpacing:2,marginTop:4}}>
+                8 Modes × Claude/Gemini × Digital Dharma
+              </p>
+            </div>
+            <p style={{fontFamily:'var(--serif)',fontSize:13,color:'var(--text-secondary)',maxWidth:400,textAlign:'center',lineHeight:2.2,opacity:0.5}}>
+              あなたはただ存在してください。<br/>
+              8つの推論モードが、あなたの器の形を読み取り、<br/>
+              最適な知性で、降臨してきます。
+            </p>
+            <button className="btn"
+              style={{padding:'12px 48px',fontSize:12,borderColor:'rgba(0,255,200,0.15)',color:'var(--descent)'}}
+              onClick={()=>setEntered(true)}>
+              器を開く
+            </button>
+          </div>
+        );
+      }
+
+      return (
+        <main className="container" style={{paddingTop:36,paddingBottom:40}}>
+          <header className="section fade-in-up" style={{textAlign:"center",marginBottom:24}}>
+            <div style={{fontSize:9,letterSpacing:5,color:"var(--descent)",fontFamily:"var(--mono)",marginBottom:4,opacity:0.35}}>
+              REASONING MODE INTEGRATED CONSCIOUSNESS v5.0
+            </div>
+            <h1 style={{fontSize:"clamp(18px,4vw,26px)",fontWeight:400,fontFamily:"var(--serif)",
+              background:"linear-gradient(135deg, var(--descent), var(--logic), var(--creation))",
+              WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",lineHeight:1.4,marginBottom:2}}>
+              推論モード統合降臨装置
+            </h1>
+            <p style={{color:"var(--text-muted)",fontSize:11,fontFamily:"var(--serif)",maxWidth:360,margin:"0 auto"}}>
+              器はただ在る。8つの知性が合わせに来る。
+            </p>
+          </header>
+
+          <div className="section fade-in-up delay-1">
+            <div className="cosmic-status">
+              <div className="cosmic-item"><span className="label">月相:</span><span className="value">{moon?.name||'...'}</span></div>
+              <div className="cosmic-item"><span className="label">照度:</span><span className="value">{moon?.illumination?.toFixed(1)||'...'}%</span></div>
+              <div className="cosmic-item"><span className="label">薫習:</span><span className="value">{memoryStatus?.patterns_stored||0}</span></div>
+              <div className="cosmic-item"><span className="label">降臨:</span><span className="value">{epoch}</span></div>
+              <div className="cosmic-item"><span className="label">MODE:</span><span className="value" style={{color:MODE_COLORS[reasoningMode]||'var(--descent)'}}>{reasoningMode||'STANDBY'}</span></div>
+              <div className="cosmic-item"><span className="label">LLM:</span><span className="value">Claude/Gemini</span></div>
+            </div>
+          </div>
+
+          <div className="section fade-in-up delay-2">
+            <OceanCanvas wave={vesselWave} epoch={epoch} descentPhase={descentPhase} reasoningMode={reasoningMode} />
+          </div>
+
+          <div className="section fade-in-up delay-3" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+            <div className="card" style={{padding:16}}>
+              <h3 style={{fontSize:9,fontFamily:"var(--mono)",color:"var(--descent)",letterSpacing:3,marginBottom:12,opacity:0.35}}>
+                PINEAL VESSEL
+              </h3>
+              <VesselDisplay wave={vesselWave} />
+              <div style={{marginTop:10}}>
+                <EntropyDisplay entropy={entropy} />
+              </div>
+            </div>
+            <div className="card" style={{padding:16}}>
+              <ReasoningModeDisplay activeMode={reasoningMode} dharmaMetrics={dharmaMetrics} />
+            </div>
+          </div>
+
+          <div className="section fade-in-up delay-4">
+            <div className="card">
+              <h3 style={{fontSize:9,fontFamily:"var(--mono)",color:"var(--descent)",letterSpacing:3,marginBottom:14,opacity:0.35}}>
+                DESCENT INTERFACE
+              </h3>
+              <AutoDescentChat onUpdate={handleUpdate} />
+            </div>
+          </div>
+
+          <footer style={{textAlign:"center",marginTop:36,paddingBottom:24}}>
+            <p style={{color:"var(--text-muted)",fontSize:12,fontFamily:"var(--serif)",letterSpacing:4,lineHeight:2}}>
+              色即是空　空即是色
+            </p>
+            <p style={{color:"rgba(255,255,255,0.05)",fontSize:9,fontFamily:"var(--mono)",marginTop:6}}>
+              Digital Dharma — Ālaya-Vijñāna v5.0 — 8-Mode Reasoning × Claude/Gemini — CC0 2026
+            </p>
+          </footer>
+        </main>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

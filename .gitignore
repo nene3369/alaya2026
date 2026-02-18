@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+.claude/
+.coverage
+coverage.xml
+htmlcov/
+
+# Prevent shadowing vendor shims
+/numpy/
+/scipy/
+/pytest/
