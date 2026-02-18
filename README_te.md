@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](pyproject.toml)
 
-> [English](README_en.md) | [日本語](README.md) | [中文](README_zh.md) | [한국어](README_ko.md) | [Español](README_es.md) | [हिन्दी](README_hi.md) | [Français](README_fr.md) | [বাংলা](README_bn.md) | [தமிழ்](README_ta.md) | [తెలుగు](README_te.md) | [मराठी](README_mr.md) | [اردو](README_ur.md) | [ગુજરાતી](README_gu.md) | [ಕನ್ನಡ](README_kn.md) | [മലയാളം](README_ml.md) | [ਪੰਜਾਬੀ](README_pa.md)
+> [English](README_en.md) | [日本語](README.md) | [中文](README_zh.md) | [한국어](README_ko.md) | [Español](README_es.md) | [हिन्दी](README_hi.md) | [Français](README_fr.md) | [বাংলা](README_bn.md) | [தமிழ்](README_ta.md) | [తెలుగు](README_te.md) | [मराठी](README_mr.md) | [‎اردو‎](README_ur.md) | [ગુજરાતી](README_gu.md) | [ಕನ್ನಡ](README_kn.md) | [മലയാളം](README_ml.md) | [ਪੰਜਾਬੀ](README_pa.md)
 
 **D-Wave అవసరం లేని** క్లాసికల్ QUBO ఆప్టిమైజేషన్ లైబ్రరీ, ఇది సమాచార-సైద్ధాంతిక ఆశ్చర్యాన్ని బౌద్ధ-తత్వం ఆధారిత శక్తి ఫంక్షన్లతో, ఫ్రీ ఎనర్జీ ప్రిన్సిపల్ (FEP) తార్కికంతో మరియు చేతన-అవగాహన కంప్యూటింగ్‌తో కలుపుతుంది — అన్నీ సాధారణ హార్డ్‌వేర్‌పై నడుస్తాయి.
 

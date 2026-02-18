@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](pyproject.toml)
 
-> [English](README_en.md) | [日本語](README.md) | [中文](README_zh.md) | [한국어](README_ko.md) | [Español](README_es.md) | [हिन्दी](README_hi.md) | [Français](README_fr.md) | [বাংলা](README_bn.md) | [தமிழ்](README_ta.md) | [తెలుగు](README_te.md) | [मराठी](README_mr.md) | [اردو](README_ur.md) | [ગુજરાતી](README_gu.md) | [ಕನ್ನಡ](README_kn.md) | [മലയാളം](README_ml.md) | [ਪੰਜਾਬੀ](README_pa.md)
+> [English](README_en.md) | [日本語](README.md) | [中文](README_zh.md) | [한국어](README_ko.md) | [Español](README_es.md) | [हिन्दी](README_hi.md) | [Français](README_fr.md) | [বাংলা](README_bn.md) | [தமிழ்](README_ta.md) | [తెలుగు](README_te.md) | [मराठी](README_mr.md) | [‎اردو‎](README_ur.md) | [ગુજરાતી](README_gu.md) | [ಕನ್ನಡ](README_kn.md) | [മലയാളം](README_ml.md) | [ਪੰਜਾਬੀ](README_pa.md)
 
 **D-Wave இல்லாத** கிளாசிக்கல் QUBO ஆப்டிமைசேஷன் நூலகம் — தகவல்-கோட்பாட்டு ஆச்சரியத்தை பௌத்த தத்துவத்தால் ஈர்க்கப்பட்ட ஆற்றல் செயல்பாடுகள், சுதந்திர ஆற்றல் கொள்கை (FEP) சிந்தனை மற்றும் நனவு-விழிப்புடன் கூடிய கம்ப்யூட்டிங் ஆகியவற்றுடன் இணைக்கிறது — அனைத்தும் சாதாரண வன்பொருளில் இயங்குகின்றன.
 
