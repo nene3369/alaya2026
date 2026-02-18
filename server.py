@@ -38,7 +38,7 @@ from lmm.reasoning.orchestrator import DharmaReasonerOrchestrator
 try:
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import FileResponse
+    from fastapi.responses import FileResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
 except ImportError:
@@ -721,6 +721,107 @@ async def call_gemini(
 
 
 # ===================================================================
+# Streaming LLM Clients
+# ===================================================================
+async def call_claude_stream(
+    messages: list[dict],
+    system: str,
+    params: LLMParams,
+    api_key: str,
+):
+    """Stream Claude API responses — yields text chunks."""
+    body: dict[str, Any] = {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": params.max_tokens,
+        "system": system,
+        "messages": messages,
+        "temperature": params.temperature,
+        "stream": True,
+    }
+    if params.top_k > 0:
+        body["top_k"] = params.top_k
+    if params.top_p < 1.0:
+        body["top_p"] = params.top_p
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        async with client.stream(
+            "POST",
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            json=body,
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                raw = line[6:]
+                if raw == "[DONE]":
+                    break
+                try:
+                    event = json.loads(raw)
+                    if event.get("type") == "content_block_delta":
+                        delta = event.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            yield delta["text"]
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+
+async def call_gemini_stream(
+    messages: list[dict],
+    system: str,
+    params: LLMParams,
+    api_key: str,
+):
+    """Stream Gemini API responses — yields text chunks."""
+    contents = []
+    for msg in messages:
+        role = "user" if msg["role"] == "user" else "model"
+        contents.append({
+            "role": role,
+            "parts": [{"text": msg["content"]}],
+        })
+
+    body: dict[str, Any] = {
+        "contents": contents,
+        "systemInstruction": {"parts": [{"text": system}]},
+        "generationConfig": {
+            "temperature": params.temperature,
+            "maxOutputTokens": params.max_tokens,
+        },
+    }
+    if params.top_p < 1.0:
+        body["generationConfig"]["topP"] = params.top_p
+    if params.top_k > 0:
+        body["generationConfig"]["topK"] = params.top_k
+
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/"
+        f"models/gemini-2.0-flash:streamGenerateContent?key={api_key}&alt=sse"
+    )
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        async with client.stream("POST", url, json=body) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                raw = line[6:]
+                try:
+                    event = json.loads(raw)
+                    for cand in event.get("candidates", []):
+                        for part in cand.get("content", {}).get("parts", []):
+                            if "text" in part:
+                                yield part["text"]
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+
+# ===================================================================
 # Adapter Forging — Meta-prompt for persona creation
 # ===================================================================
 def build_meta_prompt(
@@ -789,6 +890,30 @@ class DescentPipeline:
         self.router = LLMRouter()
         self.reasoning_engine = ReasoningEngine()
 
+        # Adapter cache (wave+mode → adapter JSON, avoids redundant LLM calls)
+        self._adapter_cache: dict[str, tuple[dict, float]] = {}
+        self._adapter_cache_max = 32
+        self._adapter_cache_ttl = 120.0  # 2分TTL
+
+    def _adapter_key(self, wave: list[float], mode: str) -> str:
+        """Generate cache key from quantized wave + mode."""
+        rounded = tuple(round(v, 1) for v in wave) + (mode,)
+        return hashlib.md5(str(rounded).encode()).hexdigest()[:12]
+
+    def _get_cached_adapter(self, key: str) -> dict | None:
+        if key in self._adapter_cache:
+            adapter, ts = self._adapter_cache[key]
+            if time.time() - ts < self._adapter_cache_ttl:
+                return adapter
+            del self._adapter_cache[key]
+        return None
+
+    def _cache_adapter(self, key: str, adapter: dict):
+        if len(self._adapter_cache) >= self._adapter_cache_max:
+            oldest = min(self._adapter_cache, key=lambda k: self._adapter_cache[k][1])
+            del self._adapter_cache[oldest]
+        self._adapter_cache[key] = (adapter, time.time())
+
     async def execute(
         self,
         message: str,
@@ -838,29 +963,38 @@ class DescentPipeline:
 
         llm_call = call_claude if llm_target == "claude" else call_gemini
 
-        # Forge adapter via meta-prompt
-        meta_prompt = build_meta_prompt(wave, moon, mode, complexity, history)
-        try:
-            adapter_raw = await llm_call(
-                [{"role": "user", "content": meta_prompt}],
-                "メタ意識としてJSONのみを出力せよ。",
-                LLMParams(temperature=0.4, max_tokens=400),
-                api_key,
-            )
-            adapter = json.loads(
-                adapter_raw.replace("```json", "").replace("```", "").strip()
-            )
-        except Exception:
-            adapter = {
-                "persona": "阿頼耶識の声",
-                "tone": "穏やかに",
-                "style": "本質的に",
-                "max_words": 120,
-                "key_principle": "器への同調",
-                "silence_ratio": 0.3,
-                "frequency_match": "自然な共鳴",
-                "reasoning_mode": mode,
-            }
+        # Adapter cache check — skip LLM call on hit (halves API calls)
+        adapter_key = self._adapter_key(wave, mode)
+        cached_adapter = self._get_cached_adapter(adapter_key)
+        if cached_adapter:
+            adapter = cached_adapter
+        else:
+            # Use Gemini Flash for adapter forging if available (fast+cheap)
+            forge_call = call_gemini if api_keys.get("gemini") else llm_call
+            forge_key = api_keys.get("gemini", api_key)
+            meta_prompt = build_meta_prompt(wave, moon, mode, complexity, history)
+            try:
+                adapter_raw = await forge_call(
+                    [{"role": "user", "content": meta_prompt}],
+                    "メタ意識としてJSONのみを出力せよ。",
+                    LLMParams(temperature=0.4, max_tokens=400),
+                    forge_key,
+                )
+                adapter = json.loads(
+                    adapter_raw.replace("```json", "").replace("```", "").strip()
+                )
+            except Exception:
+                adapter = {
+                    "persona": "阿頼耶識の声",
+                    "tone": "穏やかに",
+                    "style": "本質的に",
+                    "max_words": 120,
+                    "key_principle": "器への同調",
+                    "silence_ratio": 0.3,
+                    "frequency_match": "自然な共鳴",
+                    "reasoning_mode": mode,
+                }
+            self._cache_adapter(adapter_key, adapter)
 
         # Phase 4: MANIFEST — generate response with mode-controlled params
         response_system = (
@@ -1035,6 +1169,120 @@ async def descent(req: DescentRequest):
         req.message, req.history, api_keys, req.llm_preference,
     )
     return asdict(result)
+
+
+@app.post("/api/descent/stream")
+async def descent_stream(req: DescentRequest):
+    """Streaming descent pipeline — SSE events for real-time UI."""
+    api_keys = {}
+    if req.claude_api_key:
+        api_keys["claude"] = req.claude_api_key
+    if req.gemini_api_key:
+        api_keys["gemini"] = req.gemini_api_key
+
+    if not api_keys:
+        return {"error": "At least one API key (claude or gemini) is required"}
+
+    pipeline = sessions.get(req.session_id or None)
+
+    async def generate():
+        moon = compute_moon_phase()
+
+        # Phase 1: SENSE
+        yield f"data: {json.dumps({'type':'phase','phase':'sensing'})}\n\n"
+        wave = pipeline.vessel.auto_sense(req.message)
+        wave_arr = np.array(wave)
+        cp = compute_complexity(wave_arr)
+        complexity = cp.complexity_score
+
+        pattern = np.array(wave + [moon.phase, moon.illumination / 100, 0, 0])
+        pipeline.memory.store(pattern)
+
+        # Phase 2: REASON
+        yield f"data: {json.dumps({'type':'phase','phase':'reasoning'})}\n\n"
+        rr = await pipeline.reasoning_engine.run_async(
+            wave, moon, complexity, pipeline.memory, timeout=2.0,
+        )
+        mode = select_reasoning_mode(wave, complexity, pipeline.epoch)
+        yield f"data: {json.dumps({'type':'mode','mode':mode,'vessel':wave})}\n\n"
+
+        params = pipeline.mode_controller.build_params(
+            mode, wave, complexity, moon, pipeline.memory, req.history,
+            reasoning_result=rr,
+        )
+
+        # Phase 3: DESCEND
+        llm_target = pipeline.router.route(wave, mode, req.llm_preference)
+        api_key = api_keys.get(llm_target, "")
+        if not api_key:
+            llm_target = "claude" if api_keys.get("claude") else "gemini"
+            api_key = api_keys.get(llm_target, "")
+
+        # Adapter cache check
+        a_key = pipeline._adapter_key(wave, mode)
+        adapter = pipeline._get_cached_adapter(a_key)
+        if not adapter:
+            yield f"data: {json.dumps({'type':'phase','phase':'forging'})}\n\n"
+            forge_call = call_gemini if api_keys.get("gemini") else (
+                call_claude if llm_target == "claude" else call_gemini)
+            forge_key = api_keys.get("gemini", api_key)
+            meta = build_meta_prompt(wave, moon, mode, complexity, req.history)
+            try:
+                raw = await forge_call(
+                    [{"role": "user", "content": meta}],
+                    "メタ意識としてJSONのみを出力せよ。",
+                    LLMParams(temperature=0.4, max_tokens=400),
+                    forge_key,
+                )
+                adapter = json.loads(
+                    raw.replace("```json", "").replace("```", "").strip()
+                )
+            except Exception:
+                adapter = {
+                    "persona": "阿頼耶識の声", "tone": "穏やかに",
+                    "style": "本質的に", "max_words": 120,
+                    "key_principle": "器への同調", "silence_ratio": 0.3,
+                    "reasoning_mode": mode,
+                }
+            pipeline._cache_adapter(a_key, adapter)
+
+        yield f"data: {json.dumps({'type':'adapter','adapter':adapter})}\n\n"
+
+        # Phase 4: MANIFEST (streaming)
+        response_system = (
+            f"{params.system_prompt}\n\n---\n"
+            f"あなたは「{adapter.get('persona', '阿頼耶識の声')}」として降臨した。\n"
+            f"口調: {adapter.get('tone', '穏やかに')}\n"
+            f"スタイル: {adapter.get('style', '本質的に')}\n"
+            f"最大文字数: {adapter.get('max_words', 150)}字\n"
+            f"核心原則: {adapter.get('key_principle', '慈悲と智慧の均衡')}"
+        )
+
+        recent = req.history[-20:] if len(req.history) > 20 else req.history
+        conv = [{"role": m["role"], "content": m["content"]} for m in recent]
+        conv.append({"role": "user", "content": req.message})
+
+        stream_fn = call_claude_stream if llm_target == "claude" else call_gemini_stream
+        full_text = ""
+        async for token in stream_fn(conv, response_system, params, api_key):
+            full_text += token
+            yield f"data: {json.dumps({'type':'token','text':token})}\n\n"
+
+        # Post-process
+        pipeline.memory.store(np.array(wave + [
+            moon.phase, moon.illumination / 100,
+            adapter.get("silence_ratio", 0.3),
+            (adapter.get("max_words", 100)) / 500,
+        ]))
+        pipeline.epoch += 1
+        if pipeline.epoch % 10 == 0:
+            pipeline.memory.decay()
+
+        entropy_signal = params.entropy_signal or harvest_entropy()
+
+        yield f"data: {json.dumps({'type':'done','response':full_text,'adapter':adapter,'vessel':wave,'reasoning_mode':mode,'llm_used':llm_target,'llm_params':{'temperature':params.temperature,'top_p':params.top_p,'top_k':params.top_k,'max_tokens':params.max_tokens,'force_cot':params.force_cot},'dharma_metrics':{'complexity_score':complexity,'gini':cp.gini,'cv':cp.cv,'entropy':cp.entropy,'mode_selected':mode,'epoch':pipeline.epoch,'fep_energy':rr.get('energy',0),'fep_convergence':rr.get('convergence',0),'fep_steps':rr.get('steps_used',0),'fep_solver':rr.get('solver_used',''),'selected_dimensions':rr.get('selected_dimensions',[]),'orchestrator_mode':rr.get('mode_selected','')},'entropy':{'source':'os.urandom','quality':0.99,'signal':entropy_signal},'memory_status':{'patterns_stored':pipeline.memory.n_patterns,'total_strength':pipeline.memory.total_strength},'moon':asdict(moon)})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.post("/api/sense")

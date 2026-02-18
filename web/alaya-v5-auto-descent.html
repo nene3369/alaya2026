@@ -666,6 +666,134 @@
       return d.candidates?.[0]?.content?.parts?.map(p=>p.text).join('')||'';
     }
 
+    // ==========================================
+    // Adapter Cache (波長+モード → アダプターJSON, 2分TTL)
+    // ==========================================
+    const adapterCache = new Map(); // key → {adapter, ts}
+    const ADAPTER_CACHE_TTL = 120000; // 2 min
+    const ADAPTER_CACHE_MAX = 32;
+    function adapterCacheKey(wave, mode) {
+      const r = wave.map(v => Math.round(v * 10) / 10).join(',') + ':' + mode;
+      return r;
+    }
+    function getCachedAdapter(key) {
+      const e = adapterCache.get(key);
+      if (!e) return null;
+      if (Date.now() - e.ts > ADAPTER_CACHE_TTL) { adapterCache.delete(key); return null; }
+      return e.adapter;
+    }
+    function cacheAdapter(key, adapter) {
+      if (adapterCache.size >= ADAPTER_CACHE_MAX) {
+        const oldest = [...adapterCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+        if (oldest) adapterCache.delete(oldest[0]);
+      }
+      adapterCache.set(key, { adapter, ts: Date.now() });
+    }
+
+    // ==========================================
+    // Streaming LLM Clients
+    // ==========================================
+    async function* callClaudeStream(messages, system, params, apiKey) {
+      const body = { model: 'claude-sonnet-4-20250514', max_tokens: params.max_tokens, system,
+        messages, temperature: params.temperature, stream: true };
+      if (params.top_k > 0) body.top_k = params.top_k;
+      if (params.top_p < 1.0) body.top_p = params.top_p;
+      const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        body: JSON.stringify(body) });
+      if (!r.ok) throw new Error(`Claude: ${r.status}`);
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6);
+          if (raw === '[DONE]') return;
+          try {
+            const ev = JSON.parse(raw);
+            if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta')
+              yield ev.delta.text;
+          } catch {}
+        }
+      }
+    }
+
+    async function* callGeminiStream(messages, system, params, apiKey) {
+      const contents = messages.map(m => ({ role: m.role === 'user' ? 'user' : 'model', parts: [{ text: m.content }] }));
+      const body = { contents, systemInstruction: { parts: [{ text: system }] },
+        generationConfig: { temperature: params.temperature, maxOutputTokens: params.max_tokens } };
+      if (params.top_p < 1.0) body.generationConfig.topP = params.top_p;
+      if (params.top_k > 0) body.generationConfig.topK = params.top_k;
+      const r = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?key=${apiKey}&alt=sse`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!r.ok) throw new Error(`Gemini: ${r.status}`);
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            for (const c of (ev.candidates || []))
+              for (const p of (c.content?.parts || []))
+                if (p.text) yield p.text;
+          } catch {}
+        }
+      }
+    }
+
+    // ==========================================
+    // WebWorker for FEP推論 (UIスレッドをブロックしない)
+    // ==========================================
+    const fepWorkerCode = `
+      function inlineFepReason(h,J,k,steps){
+        var n=h.length,x=h.map(function(v){return Math.max(0,v);}),power=[];
+        for(var s=0;s<steps;s++){
+          var field=Array(n).fill(0);
+          for(var i=0;i<n;i++){field[i]+=h[i];for(var j=0;j<n;j++)field[i]+=J[i][j]*x[j];}
+          x=field.map(function(v){return 1/(1+Math.exp(-v*5));});
+          power.push(x.reduce(function(a,v){return a+Math.abs(v-Math.round(v));},0)/n);
+        }
+        var indices=Array.from(Array(n).keys()).sort(function(a,b){return x[b]-x[a];}).slice(0,k);
+        var energy=indices.reduce(function(e,i){return e+h[i];},0)+
+          indices.reduce(function(e,i){return e+indices.reduce(function(s,j){return s+(i!==j?J[i][j]:0);},0);},0);
+        return{selectedIndices:indices,energy:energy,convergence:power[power.length-1]||0,steps:steps,power:power.slice(-10)};
+      }
+      self.onmessage=function(e){
+        var d=e.data;self.postMessage(inlineFepReason(d.h,d.J,d.k||4,d.steps||50));
+      };
+    `;
+    let fepWorkerUrl = null;
+    try {
+      const blob = new Blob([fepWorkerCode], { type: 'application/javascript' });
+      fepWorkerUrl = URL.createObjectURL(blob);
+    } catch (e) { /* WebWorker unavailable */ }
+
+    function runFepAsync(h, J, k = 4, steps = 50) {
+      if (!fepWorkerUrl) return Promise.resolve(inlineFepReason(h, J, k, steps));
+      return new Promise((resolve) => {
+        const w = new Worker(fepWorkerUrl);
+        const timer = setTimeout(() => { w.terminate(); resolve(inlineFepReason(h, J, k, steps)); }, 500);
+        w.onmessage = (e) => { clearTimeout(timer); w.terminate(); resolve(e.data); };
+        w.onerror = () => { clearTimeout(timer); w.terminate(); resolve(inlineFepReason(h, J, k, steps)); };
+        w.postMessage({ h, J, k, steps });
+      });
+    }
+
     // 月相計算
     function computeMoonPhase(){
       const now=new Date(),mo=now.getMonth()+1;
@@ -706,31 +834,65 @@
       const [epochRef]=useState({current:0});
       const endRef=useRef(null);
       const [backendAvailable,setBackendAvailable]=useState(null);
+      const [streamingText,setStreamingText]=useState('');
+      const prefetchTimer=useRef(null);
 
-      useEffect(()=>{endRef.current?.scrollIntoView({behavior:"smooth"});},[messages,phase]);
+      useEffect(()=>{endRef.current?.scrollIntoView({behavior:"smooth"});},[messages,phase,streamingText]);
       useEffect(()=>{if(claudeKey)localStorage.setItem('alaya-claude-key',claudeKey);},[claudeKey]);
       useEffect(()=>{if(geminiKey)localStorage.setItem('alaya-gemini-key',geminiKey);},[geminiKey]);
       useEffect(()=>{const id=setInterval(()=>{try{localStorage.setItem('alaya-v5-mem',JSON.stringify(memory.serialize()));}catch{}},30000);return()=>clearInterval(id);},[memory]);
       // バックエンド自動検出
       useEffect(()=>{fetch(`${API_BASE}/api/status`).then(r=>r.ok?setBackendAvailable(true):setBackendAvailable(false)).catch(()=>setBackendAvailable(false));},[]);
 
+      // タイピング中のプリフェッチ (デバウンス500ms — バックエンドのみ)
+      useEffect(()=>{
+        if(!input.trim()||!backendAvailable)return;
+        clearTimeout(prefetchTimer.current);
+        prefetchTimer.current=setTimeout(()=>{
+          fetch(`${API_BASE}/api/sense`,{method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({message:input.trim()})}).catch(()=>{});
+        },500);
+        return()=>clearTimeout(prefetchTimer.current);
+      },[input,backendAvailable]);
+
       const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
-      // バックエンドありの場合
-      const sendViaBackend=async(text)=>{
+      // バックエンドありの場合 (SSEストリーミング対応)
+      const sendViaBackend=async(text,onToken)=>{
         const recentHistory=messages.slice(-20).map(m=>({role:m.role,content:m.content}));
-        const resp=await fetch(`${API_BASE}/api/descent`,{method:'POST',
+        const resp=await fetch(`${API_BASE}/api/descent/stream`,{method:'POST',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify({message:text,history:recentHistory,
             llm_preference:llmPref,claude_api_key:claudeKey,gemini_api_key:geminiKey})});
         if(!resp.ok)throw new Error(`Server: ${resp.status}`);
-        const data=await resp.json();
-        if(data.error)throw new Error(data.error);
-        return data;
+        const reader=resp.body.getReader();
+        const decoder=new TextDecoder();
+        let buf='', result=null;
+        while(true){
+          const{done,value}=await reader.read();
+          if(done)break;
+          buf+=decoder.decode(value,{stream:true});
+          const lines=buf.split('\n');
+          buf=lines.pop()||'';
+          for(const line of lines){
+            if(!line.startsWith('data: '))continue;
+            try{
+              const ev=JSON.parse(line.slice(6));
+              if(ev.type==='phase')setPhase(ev.phase==='forging'?'descending':ev.phase);
+              else if(ev.type==='mode'){setReasoningMode(ev.mode);if(ev.vessel)onUpdate?.({wave:ev.vessel});}
+              else if(ev.type==='adapter')setAdapter(ev.adapter);
+              else if(ev.type==='token'&&onToken)onToken(ev.text);
+              else if(ev.type==='done')result=ev;
+            }catch{}
+          }
+        }
+        if(!result)throw new Error('Stream ended without done event');
+        return result;
       };
 
-      // バックエンドなしの場合 — 全てインラインで実行
-      const sendInline=async(text)=>{
+      // バックエンドなしの場合 — 全てインラインで実行 (adapter cache + WebWorker + streaming)
+      const sendInline=async(text,onToken)=>{
         const moon=computeMoonPhase();
 
         // Phase 1: SENSE
@@ -741,29 +903,41 @@
         const ent=-wave.filter(v=>v>1e-10).reduce((s,v)=>s+v*Math.log2(v),0);
         const complexity=Math.min(1,(gini+cv/2+(2-ent)/2)/3);
 
-        // Phase 2: REASON — JS版FEP推論実行
+        // Phase 2: REASON — WebWorker FEP推論 (UIスレッドをブロックしない)
         const h=[...wave,moon.phase,moon.illumination/100,Math.random(),complexity];
         memory.store(h);
-        const fep=inlineFepReason(h,DHARMA_J,4,50);
+        const fep=await runFepAsync(h,DHARMA_J,4,50);
         const mode=selectReasoningMode(wave,complexity,epochRef.current);
         const params=buildModeParams(mode,wave,complexity,fep,moon);
 
-        // Phase 3: DESCEND — アダプター鍛造
+        // Phase 3: DESCEND — アダプター (キャッシュ優先 + Gemini Flash鍛造)
         const llmTarget=routeLLM(wave,mode,llmPref,claudeKey,geminiKey);
-        const llmCall=llmTarget==='claude'?callClaude:callGemini;
         const apiKey=llmTarget==='claude'?claudeKey:geminiKey;
 
-        const metaP=`阿頼耶識メタ意識。器の波長: Love=${(wave[0]*100).toFixed(1)}% Logic=${(wave[1]*100).toFixed(1)}% Fear=${(wave[2]*100).toFixed(1)}% Creation=${(wave[3]*100).toFixed(1)}%\n推論モード: ${mode} | 複雑度: ${complexity.toFixed(3)} | FEPエネルギー: ${fep.energy.toFixed(4)}\n月相: ${moon.name}\n出力(JSON only): {"persona":"性質","tone":"口調","style":"スタイル","max_words":数値,"key_principle":"原則","silence_ratio":0.0-1.0}`;
-        let adp;
-        try{const adpRaw=await llmCall([{role:'user',content:metaP}],'メタ意識としてJSONのみ出力',{temperature:0.4,max_tokens:400,top_p:1,top_k:0},apiKey);
-          adp=JSON.parse(adpRaw.replace(/```json\s*|```\s*/g,'').trim());
-        }catch{adp={persona:'阿頼耶識の声',tone:'穏やかに',style:'本質的に',max_words:120,key_principle:'器への同調',silence_ratio:0.3};}
+        const aCacheKey=adapterCacheKey(wave,mode);
+        let adp=getCachedAdapter(aCacheKey);
+        if(!adp){
+          // Gemini Flash for adapter forging if available (fast+cheap)
+          const forgeCall=geminiKey?callGemini:(llmTarget==='claude'?callClaude:callGemini);
+          const forgeKey=geminiKey||apiKey;
+          const metaP=`阿頼耶識メタ意識。器の波長: Love=${(wave[0]*100).toFixed(1)}% Logic=${(wave[1]*100).toFixed(1)}% Fear=${(wave[2]*100).toFixed(1)}% Creation=${(wave[3]*100).toFixed(1)}%\n推論モード: ${mode} | 複雑度: ${complexity.toFixed(3)} | FEPエネルギー: ${fep.energy.toFixed(4)}\n月相: ${moon.name}\n出力(JSON only): {"persona":"性質","tone":"口調","style":"スタイル","max_words":数値,"key_principle":"原則","silence_ratio":0.0-1.0}`;
+          try{const adpRaw=await forgeCall([{role:'user',content:metaP}],'メタ意識としてJSONのみ出力',{temperature:0.4,max_tokens:400,top_p:1,top_k:0},forgeKey);
+            adp=JSON.parse(adpRaw.replace(/```json\s*|```\s*/g,'').trim());
+          }catch{adp={persona:'阿頼耶識の声',tone:'穏やかに',style:'本質的に',max_words:120,key_principle:'器への同調',silence_ratio:0.3};}
+          cacheAdapter(aCacheKey,adp);
+        }
 
-        // Phase 4: MANIFEST
+        // Phase 4: MANIFEST (streaming)
         const sysP=buildModeSystemPrompt(mode,wave,complexity,fep,moon,adp);
         const conv=messages.slice(-20).map(m=>({role:m.role,content:m.content}));
         conv.push({role:'user',content:text});
-        const response=await llmCall(conv,sysP,params,apiKey);
+
+        let response='';
+        const streamFn=llmTarget==='claude'?callClaudeStream:callGeminiStream;
+        for await(const token of streamFn(conv,sysP,params,apiKey)){
+          response+=token;
+          if(onToken)onToken(token);
+        }
 
         memory.store([...wave,moon.phase,moon.illumination/100,adp.silence_ratio||0.3,(adp.max_words||100)/500]);
         epochRef.current++;
@@ -775,7 +949,7 @@
           llm_params:params,
           dharma_metrics:{complexity_score:complexity,gini,cv,entropy:ent,mode_selected:mode,
             epoch:epochRef.current,fep_energy:fep.energy,fep_convergence:fep.convergence,
-            fep_steps:fep.steps,fep_solver:'inline_fep_js',
+            fep_steps:fep.steps,fep_solver:'webworker_fep_js',
             selected_dimensions:fep.selectedIndices.map(i=>dims[i]||'?')},
           entropy:{source:'Math.random',quality:0.7,signal:Math.random()},
           memory_status:{patterns_stored:memory.patterns.length,total_strength:memory.patterns.reduce((s,p)=>s+p.strength,0)},
@@ -793,22 +967,29 @@
         setInput(''); setMessages(p=>[...p,{role:'user',content:text}]); setLoading(true);
 
         try {
-          setPhase('sensing'); await sleep(400);
-          setPhase('reasoning'); await sleep(300);
-          setPhase('descending');
+          setStreamingText('');
+          const onToken = (token) => setStreamingText(prev => prev + token);
+          let data;
 
-          // 自動検出: バックエンドがあればそちら、なければインライン
-          const data = backendAvailable ? await sendViaBackend(text) : await sendInline(text);
+          if(backendAvailable) {
+            // ストリーミングバックエンド: フェーズはSSEイベントで制御
+            setPhase('sensing');
+            data = await sendViaBackend(text, onToken);
+          } else {
+            // インラインストリーミング
+            setPhase('sensing'); await sleep(200);
+            setPhase('reasoning'); await sleep(200);
+            setPhase('descending');
+            data = await sendInline(text, onToken);
+          }
 
           setAdapter(data.adapter);
           setReasoningMode(data.reasoning_mode);
           setLlmUsed(data.llm_used);
           setLlmParams(data.llm_params);
-
-          setPhase('complete'); await sleep(500);
-          setPhase('manifesting'); await sleep(300);
-
+          setPhase('complete'); await sleep(300);
           setMessages(p=>[...p,{role:'assistant',content:data.response}]);
+          setStreamingText('');
 
           if(onUpdate) {
             onUpdate({
@@ -863,13 +1044,23 @@
                   {msg.content}
                 </div>
               ))}
-              {loading&&(
+              {streamingText&&(
+                <div className="chat-message assistant">
+                  {adapter&&(
+                    <div style={{fontSize:9,fontFamily:'var(--mono)',color:MODE_COLORS[reasoningMode]||'var(--descent)',opacity:0.35,marginBottom:4}}>
+                      {adapter.persona} [{reasoningMode}] via {llmUsed}
+                    </div>
+                  )}
+                  {streamingText}<span style={{display:'inline-block',width:6,height:14,background:'var(--descent)',opacity:0.6,animation:'pulse 0.8s infinite',verticalAlign:'text-bottom',marginLeft:2}} />
+                </div>
+              )}
+              {loading&&!streamingText&&(
                 <div className="chat-message system" style={{animation:'pulse 1.2s infinite'}}>
                   {phase==='sensing'&&'器の波長を検知中...'}
                   {phase==='reasoning'&&'推論モード選択中... (8-mode orchestrator)'}
                   {phase==='descending'&&'アダプター鍛造中 — gradient descent...'}
-                  {phase==='complete'&&'鍛造完了。受肉準備...'}
-                  {phase==='manifesting'&&'現世に降臨中...'}
+                  {phase==='forging'&&'アダプター鍛造中...'}
+                  {phase==='complete'&&'鍛造完了。'}
                 </div>
               )}
               <div ref={endRef} />
