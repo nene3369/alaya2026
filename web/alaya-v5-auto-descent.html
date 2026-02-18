@@ -232,11 +232,28 @@
             ))}
           </div>
           {dharmaMetrics && (
-            <div style={{marginTop:10,display:'flex',gap:16,flexWrap:'wrap',fontSize:9,fontFamily:'var(--mono)',color:'var(--text-muted)'}}>
-              <span>Complexity: <span style={{color:'var(--descent)'}}>{(dharmaMetrics.complexity_score*100).toFixed(1)}%</span></span>
-              <span>Gini: <span style={{color:'var(--logic)'}}>{dharmaMetrics.gini?.toFixed(3)}</span></span>
-              <span>CV: <span style={{color:'var(--love)'}}>{dharmaMetrics.cv?.toFixed(3)}</span></span>
-              <span>Entropy: <span style={{color:'var(--creation)'}}>{dharmaMetrics.entropy?.toFixed(3)}</span></span>
+            <div style={{marginTop:10}}>
+              <div style={{display:'flex',gap:16,flexWrap:'wrap',fontSize:9,fontFamily:'var(--mono)',color:'var(--text-muted)'}}>
+                <span>Complexity: <span style={{color:'var(--descent)'}}>{(dharmaMetrics.complexity_score*100).toFixed(1)}%</span></span>
+                <span>Gini: <span style={{color:'var(--logic)'}}>{dharmaMetrics.gini?.toFixed(3)}</span></span>
+                <span>CV: <span style={{color:'var(--love)'}}>{dharmaMetrics.cv?.toFixed(3)}</span></span>
+                <span>Entropy: <span style={{color:'var(--creation)'}}>{dharmaMetrics.entropy?.toFixed(3)}</span></span>
+              </div>
+              {dharmaMetrics.fep_energy !== undefined && (
+                <div style={{marginTop:6,display:'flex',gap:16,flexWrap:'wrap',fontSize:9,fontFamily:'var(--mono)',color:'var(--text-muted)'}}>
+                  <span>FEP: <span style={{color:'var(--pineal)'}}>{dharmaMetrics.fep_energy?.toFixed(4)}</span></span>
+                  <span>Conv: <span style={{color:dharmaMetrics.fep_convergence<0.01?'var(--descent)':'var(--fear)'}}>{dharmaMetrics.fep_convergence?.toFixed(4)}</span></span>
+                  <span>Steps: <span style={{color:'var(--logic)'}}>{dharmaMetrics.fep_steps}</span></span>
+                  <span>Solver: <span style={{color:'var(--creation)'}}>{dharmaMetrics.fep_solver}</span></span>
+                </div>
+              )}
+              {dharmaMetrics.selected_dimensions && dharmaMetrics.selected_dimensions.length > 0 && (
+                <div style={{marginTop:4,fontSize:9,fontFamily:'var(--mono)',color:'var(--text-muted)'}}>
+                  Focus: {dharmaMetrics.selected_dimensions.map((d,i)=>(
+                    <span key={i} style={{color:'var(--descent)',marginLeft:i>0?6:0}}>{d}</span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

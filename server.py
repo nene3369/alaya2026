@@ -22,7 +22,11 @@ import numpy as np
 from scipy import sparse
 
 from lmm.reasoning.alaya import AlayaMemory
-from lmm.reasoning.base import compute_complexity
+from lmm.reasoning.base import compute_complexity, ComplexityProfile
+from lmm.reasoning.adaptive import AdaptiveReasoner
+from lmm.reasoning.theoretical import TheoreticalReasoner
+from lmm.reasoning.pineal import PinealGland
+from lmm.reasoning.orchestrator import DharmaReasonerOrchestrator
 
 # ---------------------------------------------------------------------------
 # FastAPI (lazy import for optional dependency)
@@ -166,11 +170,126 @@ def harvest_entropy_vec(n: int) -> np.ndarray:
 
 
 # ===================================================================
-# Reasoning Mode Controller — 推論モードがLLMの全パラメータを制御
+# Reasoning Engine — lmm library の実際の推論アルゴリズムを実行
+# ===================================================================
+N_VARS = 8  # 推論空間の次元数 (感情4D + 月相 + 照度 + エントロピー + 複雑度)
+K_SELECT = 4  # 選択する上位次元数
+
+
+def build_reasoning_vectors(
+    wave: list[float],
+    moon: MoonPhase,
+    complexity_score: float,
+) -> tuple[np.ndarray, sparse.csr_matrix]:
+    """感情波長 + 宇宙同期 + 複雑度 → h (バイアス), J (結合行列) に変換.
+
+    h[i]: 各次元の「驚き」（重要度）
+    J[i,j]: 次元間の相互作用（共鳴 or 対立）
+    """
+    # h: 各次元のバイアスベクトル
+    h = np.array([
+        wave[0],                      # Love
+        wave[1],                      # Logic
+        wave[2],                      # Fear
+        wave[3],                      # Creation
+        moon.phase,                   # 月の位相 (0-1)
+        moon.illumination / 100.0,    # 月の照度 (0-1)
+        harvest_entropy(),            # 物理エントロピー
+        complexity_score,             # 入力複雑度
+    ])
+
+    # J: 次元間の結合行列 (仏教的関係性)
+    rows, cols, vals = [], [], []
+    relationships = [
+        # (i, j, weight)
+        # 愛と創造は共鳴 (正の結合 = 超モジュラー的慈悲)
+        (0, 3, 0.3),   # Love ↔ Creation
+        # 論理と恐怖は対立 (負の結合)
+        (1, 2, -0.2),  # Logic ↔ Fear
+        # 愛と恐怖は対立
+        (0, 2, -0.15), # Love ↔ Fear
+        # 論理と創造は弱い共鳴
+        (1, 3, 0.1),   # Logic ↔ Creation
+        # 月の照度と愛は共鳴
+        (0, 5, 0.1),   # Love ↔ Illumination
+        # エントロピーと創造は共鳴
+        (3, 6, 0.2),   # Creation ↔ Entropy
+        # 複雑度と論理は共鳴
+        (1, 7, 0.15),  # Logic ↔ Complexity
+    ]
+    for i, j, w in relationships:
+        rows.extend([i, j])
+        cols.extend([j, i])
+        vals.extend([w, w])
+
+    J = sparse.csr_matrix((vals, (rows, cols)), shape=(N_VARS, N_VARS))
+    return h, J
+
+
+class ReasoningEngine:
+    """lmm ライブラリの推論アルゴリズムを直接実行するエンジン."""
+
+    def __init__(self):
+        # 3つの主要推論モードを初期化
+        self.adaptive = AdaptiveReasoner(N_VARS, K_SELECT)
+        self.theoretical = TheoreticalReasoner(N_VARS, K_SELECT)
+        self.pineal = PinealGland(N_VARS, K_SELECT)
+
+        # オーケストレーターに登録
+        self.orchestrator = DharmaReasonerOrchestrator()
+        self.orchestrator.register(self.adaptive)
+        self.orchestrator.register(self.theoretical)
+        self.orchestrator.register(self.pineal)
+
+    def run(
+        self,
+        wave: list[float],
+        moon: MoonPhase,
+        complexity_score: float,
+        memory: AlayaMemory,
+        mode_override: str | None = None,
+    ) -> dict:
+        """実際に FEP ODE / QUBO 推論を実行し、結果を返す."""
+        h, J = build_reasoning_vectors(wave, moon, complexity_score)
+
+        # オーケストレーターで推論 (think = 多段エスカレーション)
+        result = self.orchestrator.think(
+            h, J,
+            alaya=memory,
+            hyper_convergence_threshold=0.01,
+        )
+
+        best = result.best_result
+        selected = best.selected_indices
+        energy = best.energy
+        power_history = list(best.power_history) if best.power_history else []
+
+        # 収束率: power_historyの最後の値 (小さいほど収束)
+        convergence = power_history[-1] if power_history else 1.0
+
+        # 選択された次元のラベル
+        dim_labels = ["Love", "Logic", "Fear", "Creation",
+                      "MoonPhase", "Illumination", "Entropy", "Complexity"]
+        selected_dims = [dim_labels[int(i)] for i in selected if int(i) < len(dim_labels)]
+
+        return {
+            "mode_selected": result.mode_selected,
+            "selected_indices": [int(i) for i in selected],
+            "selected_dimensions": selected_dims,
+            "energy": float(energy),
+            "convergence": float(convergence),
+            "steps_used": best.steps_used,
+            "power_history": power_history[-10:],  # 最後の10ステップ
+            "solver_used": best.solver_used,
+        }
+
+
+# ===================================================================
+# Reasoning Mode Controller — 実際の推論結果でLLMパラメータを制御
 # ===================================================================
 @dataclass
 class LLMParams:
-    """LLM call parameters determined by reasoning mode."""
+    """LLM call parameters determined by reasoning mode + FEP results."""
     temperature: float = 0.7
     top_p: float = 1.0
     top_k: int = 0
@@ -181,7 +300,7 @@ class LLMParams:
 
 
 class ReasoningModeController:
-    """8 reasoning modes that control ALL LLM parameters."""
+    """推論結果（FEP energy, convergence, selected dims）でLLMパラメータを動的決定."""
 
     @staticmethod
     def build_params(
@@ -191,6 +310,7 @@ class ReasoningModeController:
         moon: MoonPhase,
         memory: AlayaMemory,
         history: list[dict],
+        reasoning_result: dict | None = None,
     ) -> LLMParams:
         builders = {
             "adaptive": ReasoningModeController._adaptive,
@@ -203,13 +323,19 @@ class ReasoningModeController:
             "pineal": ReasoningModeController._pineal,
         }
         builder = builders.get(mode, ReasoningModeController._adaptive)
-        return builder(wave, complexity_score, moon, memory, history)
+        return builder(wave, complexity_score, moon, memory, history, reasoning_result)
 
     @staticmethod
-    def _adaptive(wave, complexity, moon, memory, history) -> LLMParams:
+    def _adaptive(wave, complexity, moon, memory, history, rr=None) -> LLMParams:
         std = float(np.std(wave))
+        # FEP結果でtemperatureを動的調整: 収束が悪い→探索を広げる
+        convergence = rr.get("convergence", 0.5) if rr else 0.5
+        energy = rr.get("energy", 0) if rr else 0
+        temp = max(0.3, min(1.2, 0.3 + std * 2.0 + convergence * 0.3))
+        selected_dims = rr.get("selected_dimensions", []) if rr else []
+
         return LLMParams(
-            temperature=max(0.3, min(1.2, 0.3 + std * 2.0)),
+            temperature=temp,
             top_p=max(0.5, 1.0 - max(wave) * 0.5),
             max_tokens=int(complexity * 300 + 200),
             system_prompt=(
@@ -217,12 +343,20 @@ class ReasoningModeController:
                 f"Love={wave[0]*100:.0f}% Logic={wave[1]*100:.0f}% "
                 f"Fear={wave[2]*100:.0f}% Creation={wave[3]*100:.0f}%\n"
                 f"月相: {moon.name} (照度{moon.illumination:.0f}%)\n"
-                f"複雑度: {complexity:.2f} — この波長に最も自然な形で応答せよ。"
+                f"複雑度: {complexity:.2f}\n\n"
+                f"## FEP推論結果\n"
+                f"収束度: {convergence:.4f} | エネルギー: {energy:.4f}\n"
+                f"注目すべき次元: {', '.join(selected_dims)}\n"
+                f"これらの次元に重点を置き、波長に最も自然な形で応答せよ。"
             ),
         )
 
     @staticmethod
-    def _theoretical(wave, complexity, moon, memory, history) -> LLMParams:
+    def _theoretical(wave, complexity, moon, memory, history, rr=None) -> LLMParams:
+        energy = rr.get("energy", 0) if rr else 0
+        steps = rr.get("steps_used", 0) if rr else 0
+        selected_dims = rr.get("selected_dimensions", []) if rr else []
+
         return LLMParams(
             temperature=0.2,
             top_p=0.85,
@@ -235,30 +369,43 @@ class ReasoningModeController:
                 "【因（理由）】次にその根拠を述べよ\n"
                 "【喩（例証）】最後に具体例で証明せよ\n\n"
                 f"器の論理波長: {wave[1]*100:.0f}%\n"
-                f"複雑度: {complexity:.2f}"
+                f"複雑度: {complexity:.2f}\n\n"
+                f"## FEP論理推論結果\n"
+                f"推論ステップ数: {steps} | エネルギー: {energy:.4f}\n"
+                f"論理的に重要な次元: {', '.join(selected_dims)}\n"
+                f"これらの次元に基づいて論証を構築せよ。"
             ),
         )
 
     @staticmethod
-    def _hyper(wave, complexity, moon, memory, history) -> LLMParams:
+    def _hyper(wave, complexity, moon, memory, history, rr=None) -> LLMParams:
         entropy = harvest_entropy()
+        convergence = rr.get("convergence", 0.5) if rr else 0.5
+        energy = rr.get("energy", 0) if rr else 0
+        selected_dims = rr.get("selected_dimensions", []) if rr else []
+        # 収束が悪いほど（=探索が必要なほど）高いtemperatureに
+        temp = max(1.0, min(2.0, 1.0 + convergence * 1.0))
+
         return LLMParams(
-            temperature=1.5,
+            temperature=temp,
             top_k=100,
             max_tokens=600,
             entropy_signal=entropy,
             system_prompt=(
                 "あなたは般若の飛躍を体現する存在。\n"
-                "論理の枠を超え、直感的飛躍で仮説を生成せよ。\n"
-                "常識を疑い、意外な接続を見出せ。\n"
+                "論理の枠を超え、直感的飛躍で仮説を生成せよ。\n\n"
+                f"## FEP探索結果\n"
+                f"エネルギー: {energy:.4f} | 収束: {convergence:.4f}\n"
                 f"エントロピー信号: {entropy:.6f}\n"
-                f"Creation波長: {wave[3]*100:.0f}%\n"
+                f"注目次元: {', '.join(selected_dims)}\n"
+                f"Creation波長: {wave[3]*100:.0f}%\n\n"
+                "FEPが収束しなかった領域こそが、飛躍の種。\n"
                 "制約を破壊し、新たな可能性を提示せよ。"
             ),
         )
 
     @staticmethod
-    def _active(wave, complexity, moon, memory, history) -> LLMParams:
+    def _active(wave, complexity, moon, memory, history, rr=None) -> LLMParams:
         # Recall patterns from AlayaMemory
         cue = np.array(wave + [moon.phase, moon.illumination / 100, 0, 0])
         recalled = memory.recall(cue[:memory.n])
@@ -284,7 +431,7 @@ class ReasoningModeController:
         )
 
     @staticmethod
-    def _alaya(wave, complexity, moon, memory, history) -> LLMParams:
+    def _alaya(wave, complexity, moon, memory, history, rr=None) -> LLMParams:
         # Deep Hebbian recall — use J matrix patterns
         cue = np.array(wave + [moon.phase, moon.illumination / 100, 0, 0])
         seed = memory.recall(cue[:memory.n], n_steps=20)
@@ -306,7 +453,7 @@ class ReasoningModeController:
         )
 
     @staticmethod
-    def _sleep(wave, complexity, moon, memory, history) -> LLMParams:
+    def _sleep(wave, complexity, moon, memory, history, rr=None) -> LLMParams:
         # Sleep mode: consolidate memory, no LLM call needed
         memory.decay()
         return LLMParams(
@@ -320,7 +467,7 @@ class ReasoningModeController:
         )
 
     @staticmethod
-    def _embodied(wave, complexity, moon, memory, history) -> LLMParams:
+    def _embodied(wave, complexity, moon, memory, history, rr=None) -> LLMParams:
         entropy = harvest_entropy()
         harmony = 1.0 - float(np.std(wave)) * 2
         temp = max(0.3, min(1.0, 0.5 + moon.phase * 0.3 + entropy * 0.2))
@@ -345,7 +492,7 @@ class ReasoningModeController:
         )
 
     @staticmethod
-    def _pineal(wave, complexity, moon, memory, history) -> LLMParams:
+    def _pineal(wave, complexity, moon, memory, history, rr=None) -> LLMParams:
         e1 = harvest_entropy()
         e2 = harvest_entropy()
         e3 = harvest_entropy()
@@ -564,17 +711,18 @@ class DescentResult:
 
 
 class DescentPipeline:
-    """SENSE → REASON → DESCEND → MANIFEST"""
+    """SENSE → REASON (FEP/QUBO実行) → DESCEND → MANIFEST"""
 
     def __init__(self):
         self.vessel = PinealVessel()
         self.memory = AlayaMemory(
-            n_variables=8, learning_rate=0.01,
+            n_variables=N_VARS, learning_rate=0.01,
             decay_rate=0.001, max_patterns=200,
         )
         self.epoch = 0
         self.mode_controller = ReasoningModeController()
         self.router = LLMRouter()
+        self.reasoning_engine = ReasoningEngine()
 
     async def execute(
         self,
@@ -588,16 +736,10 @@ class DescentPipeline:
         # Phase 1: SENSE
         wave = self.vessel.auto_sense(message)
 
-        # Compute complexity from wave
+        # Compute complexity using lmm library's compute_complexity
         wave_arr = np.array(wave)
-        gini = float(np.sum(np.abs(np.subtract.outer(wave_arr, wave_arr)))) / (
-            2 * len(wave_arr) * float(np.sum(wave_arr) + 1e-10)
-        )
-        cv = float(np.std(wave_arr)) / (float(np.mean(wave_arr)) + 1e-10)
-        entropy_val = -float(np.sum(
-            wave_arr[wave_arr > 1e-10] * np.log2(wave_arr[wave_arr > 1e-10])
-        ))
-        complexity = min(1.0, (gini + cv / 2 + (2 - entropy_val) / 2) / 3)
+        complexity_profile = compute_complexity(wave_arr)
+        complexity = complexity_profile.complexity_score
 
         # Store in memory
         pattern = np.array(wave + [
@@ -605,10 +747,18 @@ class DescentPipeline:
         ])
         self.memory.store(pattern)
 
-        # Phase 2: REASON — auto-select reasoning mode
+        # Phase 2: REASON — 実際にFEP ODE / QUBOを実行
+        reasoning_result = self.reasoning_engine.run(
+            wave, moon, complexity, self.memory,
+        )
+        # オーケストレーターが選択したモードを使用
+        mode = reasoning_result["mode_selected"]
+        # 感情波長に基づくフォールバックモード選択 (オーケストレーターの結果を拡張)
         mode = select_reasoning_mode(wave, complexity, self.epoch)
+
         params = self.mode_controller.build_params(
             mode, wave, complexity, moon, self.memory, history,
+            reasoning_result=reasoning_result,
         )
 
         # Phase 3: DESCEND — forge adapter + route LLM
@@ -691,11 +841,17 @@ class DescentPipeline:
             },
             dharma_metrics={
                 "complexity_score": complexity,
-                "gini": gini,
-                "cv": cv,
-                "entropy": entropy_val,
+                "gini": complexity_profile.gini,
+                "cv": complexity_profile.cv,
+                "entropy": complexity_profile.entropy,
                 "mode_selected": mode,
                 "epoch": self.epoch,
+                "fep_energy": reasoning_result.get("energy", 0),
+                "fep_convergence": reasoning_result.get("convergence", 0),
+                "fep_steps": reasoning_result.get("steps_used", 0),
+                "fep_solver": reasoning_result.get("solver_used", ""),
+                "selected_dimensions": reasoning_result.get("selected_dimensions", []),
+                "orchestrator_mode": reasoning_result.get("mode_selected", ""),
             },
             entropy={
                 "source": "os.urandom",
