@@ -107,7 +107,6 @@ class TestCVWeightEvolution:
 class TestSensoryInjection:
     def test_inject_sensory_shifts_state(self):
         daemon = HeartbeatDaemon(n_dims=4, deterministic=True)
-        initial = daemon.state.copy()
         daemon.inject_sensory(np.array([1.0, 0.5, -0.3, 0.8]))
         new_state = daemon.state
         # State should have moved (at least not identical to zero)
