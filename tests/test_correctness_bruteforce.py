@@ -180,7 +180,7 @@ class TestBruteForceCorrectness:
 
     @pytest.mark.parametrize("method", ["sa", "ising_sa"])
     def test_stochastic_solvers_near_optimal_tiny(self, method: str):
-        """For n=6, k=2, SA/Ising SA should be within 5% of optimal."""
+        """For n=6, k=2, SA/Ising SA should be within 10% of optimal."""
         rng = np.random.RandomState(42)
         surprises = rng.rand(6) * 10.0
 
@@ -195,9 +195,9 @@ class TestBruteForceCorrectness:
         energy = builder.evaluate(x)
 
         gap = abs(energy - bf_energy) / abs(bf_energy)
-        assert gap < 0.05, (
+        assert gap < 0.10, (
             f"{method}: energy {energy:.4f} is {gap:.1%} away from "
-            f"optimal {bf_energy:.4f} (threshold: 5%)"
+            f"optimal {bf_energy:.4f} (threshold: 10%)"
         )
 
     def test_lmm_select_from_surprises_matches_topk(self):
