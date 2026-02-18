@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 
 import numpy as np
-import pytest
 
 from lmm.dharma.patthana import Paccaya, PatthanaEngine
 from lmm.dharma.pratitya import Bija, PratityaRAG
