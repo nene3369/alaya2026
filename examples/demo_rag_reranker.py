@@ -16,7 +16,6 @@ import time
 import numpy as np
 
 from lmm.dharma.reranker import DharmaReranker, IntentAwareRouter
-from lmm.dharma.algorithms import build_sparse_impact_graph
 
 
 def cosine_top_n(query, corpus, n):

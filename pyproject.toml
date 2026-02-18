@@ -72,10 +72,19 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-ignore = ["E402"]
+ignore = [
+    "E402",    # module-level import not at top (vendor injection)
+    "N806",    # math variable names (Q, J, H, V) in functions
+    "N803",    # math argument names (J, M, K) in signatures
+    "RUF001",  # ambiguous unicode — Japanese strings are intentional
+    "RUF002",  # ambiguous unicode in docstrings
+    "RUF003",  # ambiguous unicode in comments
+]
 
 [tool.ruff.lint.per-file-ignores]
 "lmm/_vendor/**" = ["F401", "F811", "F841", "E741"]
+"benchmarks/**" = ["E501"]
+"examples/**" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

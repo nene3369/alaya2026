@@ -39,7 +39,7 @@ class SurpriseCalculator:
     def _to_scalar(self, observations: np.ndarray) -> np.ndarray:
         if observations.ndim > 1:
             return np.linalg.norm(observations, axis=1)
-        return np.array([float(x) for x in observations])
+        return np.asarray(observations, dtype=np.float64)
 
     def _vectorized_bin_indices(
         self, observations: np.ndarray, n_bins: int = 50,
@@ -48,12 +48,8 @@ class SurpriseCalculator:
         if self._bin_edges is not None:
             edges_inner = self._bin_edges[1:-1]
             raw = np.searchsorted(edges_inner, scalars)
-            indices = np.array([min(int(x), n_bins - 1) for x in raw])
-        else:
-            indices = np.array([
-                min(int(float(x) * n_bins) % n_bins, n_bins - 1) for x in scalars
-            ])
-        return indices
+            return np.minimum(raw, n_bins - 1)
+        return np.minimum((scalars * n_bins).astype(int) % n_bins, n_bins - 1)
 
     def _surprise_from_prior(self, observations: np.ndarray) -> np.ndarray:
         if self._prior is None:
@@ -75,13 +71,15 @@ class SurpriseCalculator:
         log_prior = np.log(prior)
         counts = np.zeros(n_bins, dtype=np.float64)
         obs_scalar = self._to_scalar(observations)
-        all_bin_indices = np.array([
-            min(int(float(x) * n_bins) % n_bins, n_bins - 1) for x in obs_scalar
-        ])
+        all_bin_indices = np.minimum(
+            (obs_scalar * n_bins).astype(int) % n_bins, n_bins - 1,
+        )
+        # Incremental Bayesian update — cache cumulative sum
+        cumsum = 0.0
         for i in range(n):
             counts[all_bin_indices[i]] += 1.0
-            total = counts.sum()
-            posterior = np.clip(counts / total, eps, None)
+            cumsum += 1.0
+            posterior = np.clip(counts / cumsum, eps, None)
             surprises[i] = np.sum(posterior * (np.log(posterior) - log_prior))
         return surprises
 

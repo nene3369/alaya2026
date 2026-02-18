@@ -103,7 +103,7 @@ class DharmaReasonerOrchestrator:
         for mode_name, reasoner in self._reasoners.items():
             try:
                 results[mode_name] = reasoner.reason(h, J, **kwargs)
-            except Exception:
+            except (ValueError, RuntimeError, TypeError, np.linalg.LinAlgError):
                 continue
 
         if not results:

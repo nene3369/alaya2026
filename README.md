@@ -1,6 +1,6 @@
 # LMM - Classical QUBO Optimizer
 
-> [English README is here](README_en.md)
+> [English](README_en.md) | [中文](README_zh.md) | [한국어](README_ko.md) | [Español](README_es.md) | [हिन्दी](README_hi.md) | [Français](README_fr.md)
 
 D-Wave量子コンピュータ不要の古典的QUBO最適化ライブラリ。
 

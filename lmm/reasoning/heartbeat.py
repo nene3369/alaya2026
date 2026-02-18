@@ -211,7 +211,7 @@ class HeartbeatDaemon:
                         "pre_strength": report.pre_strength,
                         "post_strength": report.post_strength,
                     }
-                except Exception:
+                except (ValueError, RuntimeError, TypeError):
                     pass
 
             return HeartbeatTelemetry(

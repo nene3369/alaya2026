@@ -81,12 +81,12 @@ def main():
         h_arr = np.array([float(np.random.default_rng(42).integers(0, 10)) for _ in range(n)])
 
         terms = [
-            ("DukkhaTerm", lambda: DukkhaTerm(s).build(n)),
-            ("KarunaTerm", lambda: KarunaTerm(g).build(n)),
-            ("MettaTerm", lambda: MettaTerm(g).build(n)),
-            ("SilaTerm", lambda: SilaTerm(k=k).build(n)),
-            ("KarmaTerm", lambda: KarmaTerm(h_arr).build(n)),
-            ("UpekkhaTerm", lambda: UpekkhaTerm(s).build(n)),
+            ("DukkhaTerm", lambda s=s, n=n: DukkhaTerm(s).build(n)),
+            ("KarunaTerm", lambda g=g, n=n: KarunaTerm(g).build(n)),
+            ("MettaTerm", lambda g=g, n=n: MettaTerm(g).build(n)),
+            ("SilaTerm", lambda k=k, n=n: SilaTerm(k=k).build(n)),
+            ("KarmaTerm", lambda h_arr=h_arr, n=n: KarmaTerm(h_arr).build(n)),
+            ("UpekkhaTerm", lambda s=s, n=n: UpekkhaTerm(s).build(n)),
         ]
         for label, fn in terms:
             r = bench_one(f"  n={n:4d} {label:12s}", fn, warmup=1, repeat=3)
@@ -100,7 +100,7 @@ def main():
     for n in sizes:
         g = _make_graph(n)
         engine = UniversalDharmaEngine(n)
-        r = bench_one(f"  n={n:4d} purify", lambda: engine._purify_matrix(g, "bench"), warmup=1, repeat=3)
+        r = bench_one(f"  n={n:4d} purify", lambda g=g, engine=engine: engine._purify_matrix(g, "bench"), warmup=1, repeat=3)
         results.append(r)
         print(f"  n={n:4d} purify        avg={r['avg_ms']:8.2f}ms  best={r['best_ms']:8.2f}ms")
 
@@ -115,7 +115,7 @@ def main():
         engine.add(PrajnaTerm(s, weight=1.0))
         engine.add(KarunaTerm(g, weight=0.5))
         engine.add(SilaTerm(k=k, weight=10.0))
-        r = bench_one(f"  n={n:4d} synthesize", lambda: engine._synthesize(k), warmup=1, repeat=3)
+        r = bench_one(f"  n={n:4d} synthesize", lambda engine=engine, k=k: engine._synthesize(k), warmup=1, repeat=3)
         results.append(r)
         print(f"  n={n:4d} synthesize    avg={r['avg_ms']:8.2f}ms  best={r['best_ms']:8.2f}ms")
 
@@ -179,7 +179,7 @@ def main():
     print("\n--- 5. _csr_scale_data micro ---")
     for n in sizes:
         g = _make_graph(n)
-        r = bench_one(f"  n={n:4d} csr_scale", lambda: _csr_scale_data(g, -2.0), warmup=1, repeat=5)
+        r = bench_one(f"  n={n:4d} csr_scale", lambda g=g: _csr_scale_data(g, -2.0), warmup=1, repeat=5)
         results.append(r)
         print(f"  n={n:4d} csr_scale     avg={r['avg_ms']:8.2f}ms  best={r['best_ms']:8.2f}ms")
 

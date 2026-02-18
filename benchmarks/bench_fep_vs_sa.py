@@ -172,7 +172,7 @@ def run_benchmark():
     engine_tmp.add(SilaTerm(k=k, weight=10.0))
     total_h, total_J, properties, sila_gamma = engine_tmp._synthesize(k)
 
-    from lmm._compat import sparse_matvec as _sparse_matvec, sparse_dot as _sparse_dot
+    from lmm._compat import sparse_matvec as _sparse_matvec  # noqa: F401
 
     for G in [0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0]:
         with Timer() as t:
