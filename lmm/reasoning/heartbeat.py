@@ -151,8 +151,9 @@ class HeartbeatDaemon:
         Exposed publicly for deterministic testing.
         """
         try:
-            async with asyncio.timeout(self.TICK_TIMEOUT):
-                return await self._tick_inner()
+            return await asyncio.wait_for(
+                self._tick_inner(), timeout=self.TICK_TIMEOUT,
+            )
         except (asyncio.TimeoutError, TimeoutError):
             # Tick timed out — return stale snapshot rather than blocking
             return self.snapshot()
