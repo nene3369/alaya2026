@@ -4,23 +4,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](pyproject.toml)
 
-<p align="center">
-  <a href="README_en.md">English</a> |
-  <a href="README.md">日本語</a> |
-  <a href="README_zh.md">中文</a> |
-  <a href="README_ko.md">한국어</a> |
-  <a href="README_hi.md">हिन्दी</a> |
-  <a href="README_fr.md">Français</a> |
-  <a href="README_bn.md">বাংলা</a> |
-  <a href="README_ta.md">தமிழ்</a> |
-  <a href="README_te.md">తెలుగు</a> |
-  <a href="README_mr.md">मराठी</a> |
-  <a href="README_ur.md" dir="ltr">اردو</a> |
-  <a href="README_gu.md">ગુજરાતી</a> |
-  <a href="README_kn.md">ಕನ್ನಡ</a> |
-  <a href="README_ml.md">മലയാളം</a> |
-  <a href="README_pa.md">ਪੰਜਾਬੀ</a>
-</p>
+<div align="center">
+
+[English](README_en.md) | [日本語](README.md) | [中文](README_zh.md) | [한국어](README_ko.md) | [हिन्दी](README_hi.md) | [Français](README_fr.md)
+
+[বাংলা](README_bn.md) | [தமிழ்](README_ta.md) | [తెలుగు](README_te.md) | [मराठी](README_mr.md) | [‎اردو‎](README_ur.md) | [ગુજરાતી](README_gu.md) | [ಕನ್ನಡ](README_kn.md) | [മലയാളം](README_ml.md) | [ਪੰਜਾਬੀ](README_pa.md)
+
+</div>
 
 Una biblioteca de optimización QUBO clásica **sin necesidad de D-Wave** que fusiona
 la sorpresa teórico-informacional con funciones de energía inspiradas en la filosofía
