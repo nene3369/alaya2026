@@ -1,4 +1,4 @@
-# LMM — Classical QUBO Optimizer with Digital Dharma
+# LMM — Surprise-based Top-K Selection via QUBO
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -6,10 +6,13 @@
 
 > [日本語](README.md) | [中文](README_zh.md) | [한국어](README_ko.md) | [Español](README_es.md) | [हिन्दी](README_hi.md) | [Français](README_fr.md) | [বাংলা](README_bn.md) | [தமிழ்](README_ta.md) | [తెలుగు](README_te.md) | [मराठी](README_mr.md) | [‎اردو‎](README_ur.md) | [ગુજરાતી](README_gu.md) | [ಕನ್ನಡ](README_kn.md) | [മലയാളം](README_ml.md) | [ਪੰਜਾਬੀ](README_pa.md)
 
-A **D-Wave-free** classical QUBO optimization library that fuses
-information-theoretic surprise with Buddhist-philosophy-inspired energy
-functions, Free Energy Principle (FEP) reasoning, and consciousness-aware
-computing — all running on commodity hardware.
+**Select the top-K most informative items from n candidates by maximizing surprise × diversity via QUBO optimization.** No quantum computer needed — runs on classical solvers (SA, Ising SA, greedy).
+
+> **In one sentence:** Given n items with surprise scores, build a QUBO matrix encoding "pick K items that maximize total surprise while penalizing redundancy", then solve it with a classical optimizer. D-Wave not required.
+
+The library also provides an experimental **Dharma-Algebra** layer that maps
+Buddhist-philosophy-inspired energy terms (compassion as supermodular synergy,
+conduct as submodular diminishing returns) to mathematically optimal solver routing.
 
 ---
 
@@ -277,6 +280,30 @@ chip.program(weight_matrix)
 report = chip.run(input_voltages, steps=100)
 # ~10 fJ/MAC, ~30 ns convergence
 ```
+
+---
+
+## Reproducing Benchmarks
+
+All benchmarks use `seed=42` via `np.random.default_rng(42)`.
+
+```bash
+# Core solver performance (n=50..1000)
+python benchmarks/run_benchmarks.py
+
+# Dharma-Algebra engine (n=20..2000, k=10)
+python benchmarks/bench_dharma.py
+
+# FEP vs SA comparison (n=20..200)
+python benchmarks/bench_fep_vs_sa.py
+
+# Hardware suitability analysis
+python benchmarks/bench_hardware.py
+```
+
+**Environment:** Python 3.10+, numpy >= 1.24, scipy >= 1.10. Optional: hnswlib >= 0.8.0 for sparse graph benchmarks.
+
+**Baseline:** The "2.6x speedup" compares dense-matrix SA against sparse + Ising SA on the same QUBO problem (n=1000, k=10, sa_iterations=5000).
 
 ---
 
