@@ -21,6 +21,7 @@ import numpy as np
 from scipy import sparse
 
 from lmm.dharma.fep import solve_fep_kcl_analog
+from lmm.reasoning.recovery import AgentWatchdog
 
 
 @dataclass
@@ -110,6 +111,13 @@ class HeartbeatDaemon:
         # Build a minimal J matrix for solve_fep_kcl_analog
         # Diagonal-free sparse matrix for n_dims nodes
         self._J = sparse.lil_matrix((n_dims, n_dims)).tocsr()
+
+        # Watchdog for auto-recovery
+        self._watchdog = AgentWatchdog(
+            name="heartbeat",
+            max_silent_seconds=30.0,
+            value_bounds=(-10.0, 10.0),
+        )
 
     def attach_sleep(self, sleep_consolidation) -> None:
         """Attach a SleepConsolidation instance for idle-triggered consolidation."""
@@ -239,7 +247,16 @@ class HeartbeatDaemon:
         """Main heartbeat loop. Launch via asyncio.create_task(daemon.run())."""
         while not self._stop_event:
             try:
-                await self.tick()
+                telemetry = await self.tick()
+                self._watchdog.record_tick(energy=telemetry.cv)
+
+                # Periodic health check (every 10 ticks)
+                if self._tick_count % 10 == 0:
+                    report = self._watchdog.check_health(self._V)
+                    if not report.healthy:
+                        self._V = self._watchdog.execute_recovery(
+                            self._V, report,
+                        )
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -304,6 +321,11 @@ class HeartbeatDaemon:
         if abs_mean > 1e-8:
             return float(self._V.std() / abs_mean)
         return 0.0
+
+    @property
+    def watchdog(self) -> AgentWatchdog:
+        """Access the health watchdog for external monitoring."""
+        return self._watchdog
 
     def snapshot(self) -> HeartbeatTelemetry:
         """Return a telemetry snapshot without ticking."""
