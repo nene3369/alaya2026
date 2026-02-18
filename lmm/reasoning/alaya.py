@@ -54,33 +54,36 @@ class AlayaMemory:
         learning_rate: float = 0.01,
         decay_rate: float = 0.001,
         max_patterns: int = 100,
+        use_hebbian: bool = False,
     ):
         self.n = n_variables
         self.beta = beta
         self.learning_rate = learning_rate
         self.decay_rate = decay_rate
         self.max_patterns = max_patterns
+        self.use_hebbian = use_hebbian
 
         self._J = sparse.lil_matrix((n_variables, n_variables))
         self._patterns: list[MemoryTrace] = []
 
     def store(self, pattern: np.ndarray) -> None:
-        """Store a pattern via Hebbian learning."""
+        """Store a pattern. Hebbian J update only when use_hebbian=True."""
         x = np.asarray(pattern).flatten()[:self.n]
         n = len(x)
 
-        # Hebbian update: J += eta * x * x^T (outer product)
-        for i in range(n):
-            xi = float(x[i])
-            if abs(xi) < 1e-8:
-                continue
-            for j in range(i + 1, n):
-                xj = float(x[j])
-                if abs(xj) < 1e-8:
+        # Hebbian update: J += eta * x * x^T (only if opt-in)
+        if self.use_hebbian:
+            for i in range(n):
+                xi = float(x[i])
+                if abs(xi) < 1e-8:
                     continue
-                delta = self.learning_rate * xi * xj
-                self._J[i, j] = float(self._J[i, j]) + delta
-                self._J[j, i] = float(self._J[j, i]) + delta
+                for j in range(i + 1, n):
+                    xj = float(x[j])
+                    if abs(xj) < 1e-8:
+                        continue
+                    delta = self.learning_rate * xi * xj
+                    self._J[i, j] = float(self._J[i, j]) + delta
+                    self._J[j, i] = float(self._J[j, i]) + delta
 
         self._patterns.append(MemoryTrace(pattern=x.copy(), strength=1.0))
 
@@ -161,8 +164,14 @@ class AlayaMemory:
             for _ in range(n_steps):
                 # Compute similarity: scores = X @ xi (M,)
                 scores = X @ xi
+                # Adaptive beta: scale by inverse std of scores
+                _mean = float(np.sum(scores)) / max(len(scores), 1)
+                _var = float(np.sum((scores - _mean) ** 2)) / max(len(scores), 1)
+                std_scores = float(np.sqrt(_var)) if _var > 0 else 1.0
+                adaptive_beta = 4.0 / max(std_scores, 1e-6)
+                beta = min(adaptive_beta, self.beta * 2)  # cap at 2x base
                 # Apply inverse temperature and strength weighting
-                scores = self.beta * scores * strengths
+                scores = beta * scores * strengths
 
                 # Numerically stable softmax
                 scores_shifted = scores - scores.max()

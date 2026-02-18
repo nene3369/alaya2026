@@ -131,13 +131,27 @@ class ActiveInferenceEngine(BaseReasoner):
 
         J_dynamic = J * (-1.0) if J.nnz > 0 else J
 
+        current_lr = self.action_learning_rate
         for iteration in range(self.n_iterations):
             # Modulate sensory input with current belief
             V_s = V_s_base.copy()
             if observations is not None:
                 pred_error = observations - state.belief
-                V_s = V_s + self.action_learning_rate * pred_error
-                state.prediction_errors.append(float(np.dot(pred_error, pred_error)))
+                V_s = V_s + current_lr * pred_error
+                pe = float(np.dot(pred_error, pred_error))
+                state.prediction_errors.append(pe)
+
+                # Adaptive learning rate based on prediction error trend
+                if len(state.prediction_errors) >= 2:
+                    prev_pe = state.prediction_errors[-2]
+                    if pe < prev_pe:
+                        current_lr = min(current_lr * 1.2, 0.5)  # accelerate
+                    else:
+                        current_lr = max(current_lr * 0.5, 0.01)  # decelerate
+
+                # Early stopping: converged if error is small enough
+                if pe < self.nirvana_threshold and iteration > 0:
+                    break
 
             # Inject external action results if available
             if action_results:
@@ -156,6 +170,10 @@ class ActiveInferenceEngine(BaseReasoner):
             state.action_history.append(x_final.copy())
             total_steps += steps_used
             all_power.extend(power)
+
+            # Early stopping on power convergence
+            if len(all_power) >= 2 and abs(all_power[-1]) < self.nirvana_threshold:
+                break
 
         selected = self._topk_from_activations(x_final, self.k)
         energy = self._evaluate_energy(h, J, sila_gamma, selected)

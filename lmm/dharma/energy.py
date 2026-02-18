@@ -6,6 +6,7 @@ so the engine layer can auto-route to the optimal solver.
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from typing import Literal
 
@@ -103,7 +104,12 @@ class DukkhaTerm(DharmaEnergyTerm):
 
 
 class PrajnaTerm(DharmaEnergyTerm):
-    """Prajna (Wisdom) — maximise information content. Linear."""
+    """Prajna (Wisdom) — maximise information diversity via entropy-weighted selection.
+
+    Unlike Dukkha (raw surprise), Prajna favours items that contribute to
+    a more *diverse* information set.  It scales surprises by how far each
+    value deviates from the median — rewarding novel-but-not-extreme items.
+    """
 
     def __init__(self, surprises: np.ndarray, weight: float = 1.0):
         super().__init__(weight)
@@ -118,15 +124,31 @@ class PrajnaTerm(DharmaEnergyTerm):
         return "linear"
 
     def build(self, n: int) -> tuple[np.ndarray, sparse.csr_matrix | None]:
-        return -self.weight * _pad_or_trim(self.surprises, n), None
+        s = _pad_or_trim(self.surprises, n)
+        # Manual median (compat with minimal numpy)
+        sorted_s = sorted(float(x) for x in s) if len(s) > 0 else [0.0]
+        mid = len(sorted_s) // 2
+        median = sorted_s[mid] if len(sorted_s) % 2 == 1 else (sorted_s[mid - 1] + sorted_s[mid]) / 2
+        # Favour items near but above median (diverse, not extreme)
+        deviation = np.abs(s - median)
+        max_dev = float(deviation.max()) if len(deviation) > 0 else 1.0
+        diversity_weight = 1.0 - deviation / max(max_dev, 1e-10)
+        return -self.weight * s * diversity_weight, None
 
 
 class KarunaTerm(DharmaEnergyTerm):
-    """Karuna (Compassion Synergy) — supermodular co-selection reward."""
+    """Karuna (Compassion Synergy) — supermodular co-selection reward with temporal decay."""
 
-    def __init__(self, impact_graph: sparse.csr_matrix | np.ndarray, weight: float = 0.5):
+    def __init__(
+        self,
+        impact_graph: sparse.csr_matrix | np.ndarray,
+        weight: float = 0.5,
+        decay_rate: float = 0.01,
+    ):
         super().__init__(weight)
         self.graph = _to_csr(impact_graph)
+        self.decay_rate = decay_rate
+        self._age: int = 0
 
     @property
     def name(self) -> str:
@@ -137,11 +159,18 @@ class KarunaTerm(DharmaEnergyTerm):
         return "supermodular"
 
     def build(self, n: int) -> tuple[np.ndarray, sparse.csr_matrix | None]:
+        # Temporal decay: reduce weight of old co-selection patterns
+        effective_weight = self.weight * math.exp(-self.decay_rate * self._age)
+        self._age += 1
         g = _resize_sparse(self.graph, n)
         row_sums = np.asarray(g.sum(axis=1)).flatten()
-        h = self.weight * row_sums
-        J = _csr_scale_data(g, -2.0 * self.weight)
+        h = effective_weight * row_sums
+        J = _csr_scale_data(g, -2.0 * effective_weight)
         return h, J
+
+    def reset_age(self) -> None:
+        """Reset temporal decay counter (e.g. on new co-selection)."""
+        self._age = 0
 
 
 class MettaTerm(DharmaEnergyTerm):
