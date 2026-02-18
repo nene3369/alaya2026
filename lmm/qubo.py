@@ -60,7 +60,7 @@ class QUBOBuilder:
         self, surprises: np.ndarray, alpha: float = 1.0,
     ) -> None:
         """Minimise -alpha * sum(s_i * x_i) to select high-surprise items."""
-        self._diag -= alpha * np.array([float(x) for x in surprises])
+        self._diag -= alpha * np.asarray(surprises, dtype=np.float64)
 
     def add_cardinality_constraint(self, k: int, gamma: float = 10.0) -> None:
         """Add penalty gamma * (sum(x_i) - k)^2 implicitly in O(n)."""
@@ -76,12 +76,10 @@ class QUBOBuilder:
         np.fill_diagonal(sim, 0.0)
         mask = np.abs(sim) > 1e-15
         rows, cols = np.where(mask)
-        rows = np.array([int(r) for r in rows])
-        cols = np.array([int(c) for c in cols])
-        for r, c in zip(rows, cols):
-            self._offdiag_rows.append(r)
-            self._offdiag_cols.append(c)
-            self._offdiag_vals.append(float(sim[r, c]) * beta / 2.0)
+        vals = sim[rows, cols] * beta / 2.0
+        self._offdiag_rows.extend(int(r) for r in rows)
+        self._offdiag_cols.extend(int(c) for c in cols)
+        self._offdiag_vals.extend(float(v) for v in vals)
         self._invalidate_cache()
 
     # -- matrix access ---------------------------------------------------
@@ -122,7 +120,7 @@ class QUBOBuilder:
 
     def evaluate(self, x: np.ndarray) -> float:
         """Evaluate energy x^T Q x in O(n + nnz) without dense Q."""
-        x = np.array([float(v) for v in x])
+        x = np.asarray(x, dtype=np.float64)
         energy = float(np.dot(self._diag, x))
         csr = self._build_offdiag_csr()
         if csr.nnz > 0:

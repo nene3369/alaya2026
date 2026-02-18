@@ -197,12 +197,14 @@ class ClassicalQUBOSolver:
         diag = self.qubo._diag
         csr = self.qubo._build_offdiag_csr()
         gamma = self.qubo._cardinality_gamma
+        has_offdiag = csr.nnz > 0
+        # Cache Jx and update incrementally instead of recomputing each iteration
+        Jx = (np.asarray(sparse_matvec(csr, x)).flatten()
+              if has_offdiag else np.zeros(self.n))
         while True:
             n_sel = int((x > 0.5).sum())
             if n_sel == k:
                 break
-            Jx = (np.asarray(sparse_matvec(csr, x)).flatten()
-                  if csr.nnz > 0 else np.zeros(self.n))
             Qx = diag * x + Jx
             if gamma > 0:
                 sx = float(np.sum(x))
@@ -212,7 +214,10 @@ class ClassicalQUBOSolver:
                 mc = -diag[sel] + 2.0 * Qx[sel]
                 if gamma > 0:
                     mc = mc - gamma
-                x[int(sel[int(np.argmax(mc))])] = 0.0
+                drop = int(sel[int(np.argmax(mc))])
+                x[drop] = 0.0
+                if has_offdiag:
+                    sparse_row_scatter(csr, drop, Jx, -1.0)
             else:
                 unsel = np.where(x <= 0.5)[0]
                 if len(unsel) == 0:
@@ -220,7 +225,10 @@ class ClassicalQUBOSolver:
                 delta = diag[unsel] + 2.0 * Qx[unsel]
                 if gamma > 0:
                     delta = delta + gamma
-                x[int(unsel[int(np.argmin(delta))])] = 1.0
+                add = int(unsel[int(np.argmin(delta))])
+                x[add] = 1.0
+                if has_offdiag:
+                    sparse_row_scatter(csr, add, Jx, 1.0)
         return x
 
 
@@ -321,11 +329,10 @@ class SubmodularSelector:
                                 marginal[idx] -= 2.0 * self.beta * w
                                 masked[idx] -= 2.0 * self.beta * w
                 else:
-                    for j in range(n):
-                        if mask[j]:
-                            d = 2.0 * self.beta * impact_graph[best, j]
-                            marginal[j] -= d
-                            masked[j] -= d
+                    d = 2.0 * self.beta * np.asarray(impact_graph[best]).flatten()
+                    update = d * mask
+                    marginal -= update
+                    masked -= update
 
         return SubmodularResult(
             selected_indices=np.array(selected, dtype=int),

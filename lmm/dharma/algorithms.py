@@ -35,6 +35,9 @@ def build_sparse_impact_graph(
             return _build_hnsw(data, n, dim, k, M, ef_construction)
         except ImportError:
             pass
+    # Use random-projection approximate k-NN for large datasets to avoid O(n²)
+    if n > 5_000:
+        return _build_random_projection_sparse(data, n, dim, k)
     return _build_brute_force_sparse(data, n, k)
 
 
@@ -58,6 +61,81 @@ def _build_hnsw(
     graph = sparse.csr_matrix(
         (sims[mask], (rows[mask], cols[mask])), shape=(n, n), dtype=np.float64,
     )
+    return (graph + graph.T) / 2.0
+
+
+def _build_random_projection_sparse(
+    data: np.ndarray, n: int, dim: int, k: int, n_projections: int = 8,
+) -> sparse.csr_matrix:
+    """Approximate k-NN via random projections — O(n * k * n_proj) instead of O(n²d).
+
+    Projects data onto random hyperplanes, sorts within each projection,
+    and collects candidate neighbours from a sliding window. Then computes
+    exact cosine similarity only for those candidates.
+    """
+    rng = np.random.default_rng(42)
+    norms = np.clip(np.linalg.norm(data, axis=1, keepdims=True), 1e-10, None)
+    normed = data / norms
+
+    # Collect candidate neighbours via random projections
+    window = max(2 * k, 50)
+    candidates: list[set] = [set() for _ in range(n)]
+
+    for _ in range(n_projections):
+        proj = rng.standard_normal(dim)
+        scores = normed @ proj
+        order = np.argsort(scores)
+        for pos in range(n):
+            idx = int(order[pos])
+            lo = max(0, pos - window)
+            hi = min(n, pos + window + 1)
+            for nb_pos in range(lo, hi):
+                nb = int(order[nb_pos])
+                if nb != idx:
+                    candidates[idx].add(nb)
+
+    # Compute exact cosine only for candidate pairs
+    max_nnz = n * k
+    out_r = np.empty(max_nnz, dtype=int)
+    out_c = np.empty(max_nnz, dtype=int)
+    out_v = np.empty(max_nnz)
+    ptr = 0
+
+    for i in range(n):
+        cands = np.array(sorted(candidates[i]), dtype=int)
+        if len(cands) == 0:
+            continue
+        sims = normed[cands] @ normed[i]
+        if len(cands) > k:
+            if HAS_ARGPARTITION:
+                top_idx = np.argpartition(sims, -k)[-k:]
+            else:
+                top_idx = np.argsort(sims)[-k:]
+        else:
+            top_idx = np.arange(len(cands))
+        top_sims = sims[top_idx]
+        top_nodes = cands[top_idx]
+        pos = top_sims > 0.0
+        if pos.any():
+            gi = top_nodes[pos]
+            gv = top_sims[pos]
+            m = len(gi)
+            if ptr + m > len(out_r):
+                new_sz = max(len(out_r) * 2, ptr + m)
+                out_r = np.concatenate([out_r, np.empty(new_sz - len(out_r), dtype=int)])
+                out_c = np.concatenate([out_c, np.empty(new_sz - len(out_c), dtype=int)])
+                out_v = np.concatenate([out_v, np.empty(new_sz - len(out_v))])
+            out_r[ptr:ptr + m] = i
+            out_c[ptr:ptr + m] = gi
+            out_v[ptr:ptr + m] = gv
+            ptr += m
+
+    if ptr > 0:
+        graph = sparse.csr_matrix(
+            (out_v[:ptr], (out_r[:ptr], out_c[:ptr])), shape=(n, n), dtype=np.float64,
+        )
+    else:
+        graph = sparse.csr_matrix((n, n), dtype=np.float64)
     return (graph + graph.T) / 2.0
 
 

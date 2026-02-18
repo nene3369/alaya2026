@@ -46,12 +46,12 @@ try:
 except ImportError:
     raise SystemExit(
         "FastAPI not installed. Run: pip install -e '.[server]'"
-    )
+    ) from None
 
 try:
     import httpx
 except ImportError:
-    raise SystemExit("httpx not installed. Run: pip install httpx")
+    raise SystemExit("httpx not installed. Run: pip install httpx") from None
 
 
 # ===================================================================
@@ -105,8 +105,12 @@ _CONFIG_DIR = Path(__file__).parent / "config"
 
 
 def _load_semantic_clusters() -> dict[str, dict[str, float]]:
-    with open(_CONFIG_DIR / "semantic_emotions.json", encoding="utf-8") as f:
-        return json.load(f)
+    config_path = _CONFIG_DIR / "semantic_emotions.json"
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"love": {}, "logic": {}, "fear": {}, "creation": {}}
 
 
 _CLUSTERS = _load_semantic_clusters()

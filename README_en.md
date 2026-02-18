@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](pyproject.toml)
 
-> [日本語版 README はこちら](README.md)
+> [日本語](README.md) | [中文](README_zh.md) | [한국어](README_ko.md) | [Español](README_es.md) | [हिन्दी](README_hi.md) | [Français](README_fr.md)
 
 A **D-Wave-free** classical QUBO optimization library that fuses
 information-theoretic surprise with Buddhist-philosophy-inspired energy

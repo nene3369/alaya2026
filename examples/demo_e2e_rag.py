@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from lmm.dharma.reranker import DharmaReranker, IntentAwareRouter
+from lmm.dharma.reranker import IntentAwareRouter
 from lmm.llm.embeddings import ngram_vectors
 
 

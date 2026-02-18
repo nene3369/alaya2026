@@ -8,7 +8,6 @@ import math
 import time
 
 import numpy as np
-from scipy import sparse
 
 
 class Timer:
