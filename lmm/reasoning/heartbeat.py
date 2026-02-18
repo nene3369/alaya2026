@@ -77,6 +77,10 @@ class HeartbeatDaemon:
         idle_sleep_threshold: float = 60.0,
         deterministic: bool = False,
     ):
+        if n_dims > 1024:
+            raise ValueError(
+                f"n_dims={n_dims} exceeds maximum 1024 for heartbeat daemon"
+            )
         self.n_dims = n_dims
         self.dt_base = dt
         self._dt = dt

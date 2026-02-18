@@ -33,13 +33,6 @@ class ClassicalQUBOSolver:
     def __init__(self, qubo: QUBOBuilder):
         self.qubo = qubo
         self.n = qubo.n
-        self._Q_cache: np.ndarray | None = None
-
-    @property
-    def Q(self) -> np.ndarray:
-        if self._Q_cache is None:
-            self._Q_cache = self.qubo.get_matrix()
-        return self._Q_cache
 
     def solve(self, method: str = "sa", k: int | None = None, **kw) -> np.ndarray:
         if method == "sa":
@@ -59,7 +52,7 @@ class ClassicalQUBOSolver:
         for _ in range(n_restarts):
             x0 = np.random.rand(self.n)
             result = minimize(
-                lambda x: x @ self.Q @ x, x0,
+                lambda x: self.qubo.evaluate(x), x0,
                 method="SLSQP", bounds=[(0, 1)] * self.n,
             )
             x_bin = (result.x > 0.5).astype(float)
@@ -72,17 +65,24 @@ class ClassicalQUBOSolver:
 
     def solve_greedy(self, k: int | None = None) -> np.ndarray:
         x = np.zeros(self.n)
-        Q = self.Q
+        diag = self.qubo._diag
+        csr = self.qubo._build_offdiag_csr()
+        gamma = self.qubo._cardinality_gamma
         max_steps = k if k is not None else self.n
-        Qx = np.zeros(self.n)
+        Jx = np.zeros(self.n)
+        sx = 0.0
         for _ in range(max_steps):
-            marginal = np.diag(Q) + 2.0 * Qx
+            marginal = diag + 2.0 * Jx
+            if gamma > 0:
+                marginal = marginal + gamma * (2.0 * sx + 1.0 - 2.0 * x)
             marginal = np.where(x < 0.5, marginal, np.inf)
             best = int(np.argmin(marginal))
             if marginal[best] >= 0.0:
                 break
             x[best] = 1.0
-            Qx += Q[:, best]
+            sx += 1.0
+            if csr.nnz > 0:
+                sparse_row_scatter(csr, int(best), Jx, 1.0)
         return x
 
     # -- simulated annealing ---------------------------------------------
@@ -194,21 +194,32 @@ class ClassicalQUBOSolver:
 
     def _project_to_k(self, x: np.ndarray, k: int) -> np.ndarray:
         x = x.copy()
-        Q = self.Q
+        diag = self.qubo._diag
+        csr = self.qubo._build_offdiag_csr()
+        gamma = self.qubo._cardinality_gamma
         while True:
             n_sel = int((x > 0.5).sum())
             if n_sel == k:
                 break
-            Qx = Q @ x
+            Jx = (np.asarray(sparse_matvec(csr, x)).flatten()
+                  if csr.nnz > 0 else np.zeros(self.n))
+            Qx = diag * x + Jx
+            if gamma > 0:
+                sx = float(np.sum(x))
+                Qx = Qx + gamma * (sx - x)
             if n_sel > k:
                 sel = np.where(x > 0.5)[0]
-                mc = -Q[sel, sel] + 2.0 * Qx[sel]
+                mc = -diag[sel] + 2.0 * Qx[sel]
+                if gamma > 0:
+                    mc = mc - gamma
                 x[int(sel[int(np.argmax(mc))])] = 0.0
             else:
                 unsel = np.where(x <= 0.5)[0]
                 if len(unsel) == 0:
                     break
-                delta = Q[unsel, unsel] + 2.0 * Qx[unsel]
+                delta = diag[unsel] + 2.0 * Qx[unsel]
+                if gamma > 0:
+                    delta = delta + gamma
                 x[int(unsel[int(np.argmin(delta))])] = 1.0
         return x
 
