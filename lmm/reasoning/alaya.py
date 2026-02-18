@@ -1,4 +1,12 @@
-"""AlayaMemory — Hebbian synaptic storage (Alaya-vijnana)."""
+"""AlayaMemory — Modern Hopfield Network with Hebbian learning (Alaya-vijnana).
+
+Upgraded from classical Hopfield (capacity ~0.14N) to Modern Hopfield Network
+(Ramsauer et al. 2020) with exponential capacity via softmax attention.
+
+Recall mechanism:
+  Classical: x_{t+1} = sign(J @ x_t)           capacity O(N)
+  Modern:    x_{t+1} = X^T @ softmax(beta * X @ x_t)  capacity exp(N)
+"""
 
 from __future__ import annotations
 
@@ -18,23 +26,37 @@ class MemoryTrace:
 
 
 class AlayaMemory:
-    """Alaya consciousness — Hebbian associative memory store.
+    """Alaya consciousness — Modern Hopfield associative memory.
 
-    Implements a Hopfield-like associative memory using Hebbian learning:
-      dJ[i,j] = eta * x[i] * x[j]
+    Combines Hebbian learning (for J matrix compatibility) with
+    Modern Hopfield recall (softmax attention over stored patterns).
 
-    Stored patterns can be recalled through energy minimization.
+    Parameters
+    ----------
+    n_variables : int
+        Dimensionality of patterns.
+    beta : float
+        Inverse temperature for softmax attention. Higher = sharper recall.
+        Default 8.0 gives good separation for N=8 dimensions.
+    learning_rate : float
+        Hebbian learning rate for J matrix updates.
+    decay_rate : float
+        Temporal decay rate for patterns and J matrix.
+    max_patterns : int
+        Maximum number of stored patterns (FIFO eviction).
     """
 
     def __init__(
         self,
         n_variables: int,
         *,
+        beta: float = 8.0,
         learning_rate: float = 0.01,
         decay_rate: float = 0.001,
         max_patterns: int = 100,
     ):
         self.n = n_variables
+        self.beta = beta
         self.learning_rate = learning_rate
         self.decay_rate = decay_rate
         self.max_patterns = max_patterns
@@ -116,23 +138,65 @@ class AlayaMemory:
             self._patterns.pop(0)
 
     def recall(self, cue: np.ndarray, n_steps: int = 10) -> np.ndarray:
-        """Recall a pattern from a partial cue via energy descent."""
-        x = np.array(cue).flatten()[:self.n]
-        J_csr = self._J.tocsr()
+        """Recall a pattern via Modern Hopfield softmax attention.
 
+        Uses iterative softmax attention over stored patterns:
+          alpha = softmax(beta * X @ xi)     (attention weights)
+          xi    = X^T @ alpha                (weighted pattern retrieval)
+
+        This gives exponential storage capacity compared to classical
+        Hopfield's linear capacity (~0.14N).
+
+        Falls back to classical Hopfield recall when J matrix has
+        stored couplings but no explicit patterns exist.
+        """
+        xi = np.asarray(cue).flatten()[:self.n].copy()
+
+        # Modern Hopfield: softmax attention over stored patterns
+        if self._patterns:
+            # Build pattern matrix X (M x N) weighted by strength
+            X = np.array([t.pattern for t in self._patterns])  # (M, N)
+            strengths = np.array([t.strength for t in self._patterns])  # (M,)
+
+            for _ in range(n_steps):
+                # Compute similarity: scores = X @ xi (M,)
+                scores = X @ xi
+                # Apply inverse temperature and strength weighting
+                scores = self.beta * scores * strengths
+
+                # Numerically stable softmax
+                scores_shifted = scores - scores.max()
+                exp_scores = np.exp(scores_shifted)
+                alpha = exp_scores / (exp_scores.sum() + 1e-12)
+
+                # Retrieve: weighted combination of stored patterns
+                xi_new = X.T @ alpha  # (N,)
+
+                # Check convergence
+                if np.linalg.norm(xi_new - xi) < 1e-6:
+                    xi = xi_new
+                    break
+                xi = xi_new
+
+            # Increment access counts for top-contributing patterns
+            top_idx = int(np.argmax(alpha))
+            self._patterns[top_idx].access_count += 1
+
+            return xi
+
+        # Fallback: classical Hopfield if no explicit patterns stored
+        J_csr = self._J.tocsr()
         for _ in range(n_steps):
-            # Compute local field: h_i = sum_j J[i,j] * x[j]
             if J_csr.nnz > 0:
-                field = J_csr @ x
+                field = J_csr @ xi
             else:
                 field = np.zeros(self.n)
 
-            # Update: x = sign(field) where field is strong enough
-            for i in range(len(x)):
+            for i in range(len(xi)):
                 if abs(float(field[i])) > 0.1:
-                    x[i] = 1.0 if float(field[i]) > 0 else 0.0
+                    xi[i] = 1.0 if float(field[i]) > 0 else 0.0
 
-        return x
+        return xi
 
     def decay(self) -> None:
         """Apply temporal decay to all connections."""

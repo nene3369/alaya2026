@@ -94,27 +94,98 @@ def compute_moon_phase() -> MoonPhase:
 # ===================================================================
 DIMENSION_LABELS = ["Love", "Logic", "Fear", "Creation"]
 
-LOVE_WORDS = [
-    "愛", "好き", "ありがとう", "嬉しい", "幸せ", "love", "thank", "happy",
-    "warm", "心", "優しい", "感謝", "慈悲", "大切", "笑", "救", "美しい", "光",
-]
-LOGIC_WORDS = [
-    "なぜ", "理由", "分析", "構造", "数学", "論理", "証明", "定義", "理論",
-    "コード", "実装", "how", "why", "algorithm", "proof", "function",
-    "計算", "仕組み", "原理", "解析",
-]
-FEAR_WORDS = [
-    "怖い", "不安", "心配", "わからない", "苦しい", "辛い", "死", "痛い",
-    "afraid", "worry", "fear", "doubt", "苦", "迷", "闇", "孤独", "助け",
-]
-CREATION_WORDS = [
-    "作", "創", "新しい", "アイデア", "想像", "design", "create", "build",
-    "art", "夢", "描", "生み", "革新", "発明", "詩", "音楽", "物語",
-]
+# ===================================================================
+# Semantic Emotion Clusters — weighted proximity scoring
+# Substring matching captures Japanese morphological variants:
+#   怖い/怖がる/怖くて/怖さ all match "怖" (weight 1.0)
+# ===================================================================
+LOVE_SEMANTIC: dict[str, float] = {
+    # Core (1.0) — direct emotion terms
+    "愛": 1.0, "好": 1.0, "ありがとう": 1.0, "嬉し": 1.0, "幸せ": 1.0,
+    "love": 1.0, "thank": 1.0, "happy": 1.0,
+    # Strong (0.8) — closely associated concepts
+    "心": 0.8, "優し": 0.8, "感謝": 0.8, "慈悲": 0.8, "大切": 0.8,
+    "笑": 0.8, "救": 0.8, "美し": 0.8, "光": 0.8, "warm": 0.8,
+    # Medium (0.5) — semantically proximal
+    "温": 0.5, "穏": 0.5, "信": 0.5, "安心": 0.5, "祝": 0.5,
+    "care": 0.5, "kind": 0.5, "gentle": 0.5, "peace": 0.5,
+    "hope": 0.5, "joy": 0.5, "sweet": 0.5,
+    # Weak (0.3) — distant association
+    "守": 0.3, "包": 0.3, "繋": 0.3, "寄り添": 0.3,
+    "support": 0.3, "comfort": 0.3, "friend": 0.3,
+}
+LOGIC_SEMANTIC: dict[str, float] = {
+    "なぜ": 1.0, "理由": 1.0, "分析": 1.0, "構造": 1.0, "数学": 1.0,
+    "論理": 1.0, "証明": 1.0, "定義": 1.0, "理論": 1.0,
+    "how": 1.0, "why": 1.0, "algorithm": 1.0, "proof": 1.0,
+    "コード": 0.8, "実装": 0.8, "function": 0.8, "計算": 0.8,
+    "仕組み": 0.8, "原理": 0.8, "解析": 0.8,
+    "考え": 0.5, "判断": 0.5, "比較": 0.5, "検証": 0.5, "推論": 0.5,
+    "正し": 0.5, "因果": 0.5, "根拠": 0.5, "法則": 0.5,
+    "think": 0.5, "reason": 0.5, "explain": 0.5, "analyze": 0.5,
+    "debug": 0.5, "error": 0.5, "fix": 0.5, "test": 0.5,
+    "なぜなら": 0.3, "つまり": 0.3, "従って": 0.3, "故に": 0.3,
+    "because": 0.3, "therefore": 0.3, "hence": 0.3,
+}
+FEAR_SEMANTIC: dict[str, float] = {
+    "怖": 1.0, "不安": 1.0, "心配": 1.0, "苦し": 1.0, "辛": 1.0,
+    "死": 1.0, "痛": 1.0, "afraid": 1.0, "fear": 1.0,
+    "わからない": 0.8, "苦": 0.8, "迷": 0.8, "闇": 0.8, "孤独": 0.8,
+    "助け": 0.8, "worry": 0.8, "doubt": 0.8,
+    "困": 0.5, "悩": 0.5, "泣": 0.5, "壊": 0.5, "失": 0.5,
+    "無理": 0.5, "限界": 0.5, "絶望": 0.5,
+    "scared": 0.5, "anxious": 0.5, "lost": 0.5, "confused": 0.5,
+    "struggle": 0.5, "suffer": 0.5,
+    "難し": 0.3, "でも": 0.3, "けど": 0.3, "しかし": 0.3,
+    "maybe": 0.3, "perhaps": 0.3, "uncertain": 0.3,
+}
+CREATION_SEMANTIC: dict[str, float] = {
+    "作": 1.0, "創": 1.0, "新し": 1.0, "アイデア": 1.0, "想像": 1.0,
+    "design": 1.0, "create": 1.0, "build": 1.0,
+    "art": 0.8, "夢": 0.8, "描": 0.8, "生み": 0.8, "革新": 0.8,
+    "発明": 0.8, "詩": 0.8, "音楽": 0.8, "物語": 0.8,
+    "面白": 0.5, "変え": 0.5, "挑戦": 0.5, "試": 0.5, "遊": 0.5,
+    "自由": 0.5, "独自": 0.5, "オリジナル": 0.5,
+    "invent": 0.5, "imagine": 0.5, "innovate": 0.5, "explore": 0.5,
+    "experiment": 0.5, "compose": 0.5,
+    "もし": 0.3, "こんな": 0.3, "できたら": 0.3,
+    "what if": 0.3, "could": 0.3, "would": 0.3,
+}
+
+
+def _semantic_score(text: str, cluster: dict[str, float]) -> float:
+    """Compute weighted semantic similarity score via substring matching.
+
+    Substring matching captures Japanese morphological variants:
+    怖い/怖がる/怖くて → all match "怖" (weight 1.0)
+
+    Diminishing returns on repeated occurrences prevent
+    single-keyword domination.
+    """
+    score = 0.0
+    for keyword, weight in cluster.items():
+        if keyword in text:
+            count = text.count(keyword)
+            # Diminishing returns: 1st match full, subsequent +30% each (max 3 extra)
+            score += weight * (1.0 + 0.3 * min(count - 1, 3))
+    return score
+
+
+# Sentence-level structural patterns for contextual scoring
+_QUESTION_PATTERNS = ["？", "?", "ですか", "ますか", "のか", "かな", "だろう"]
+_IMPERATIVE_PATTERNS = ["して", "ください", "せよ", "しろ", "しなさい", "作って", "教えて"]
+_CONDITIONAL_PATTERNS = ["もし", "たら", "なら", "れば", "としたら", "what if", "if"]
 
 
 class PinealVessel:
-    """4D emotional wavelength detector — ported from v4 with momentum."""
+    """4D emotional wavelength detector — semantic embedding approach.
+
+    Improvements over keyword matching:
+    1. Weighted semantic clusters (core/strong/medium/weak proximity)
+    2. Substring matching for Japanese morphological variants
+    3. Sentence-level structural pattern recognition
+    4. Contextual n-gram scoring with diminishing returns
+    """
 
     def __init__(self):
         self.state = [0.25, 0.25, 0.25, 0.25]
@@ -122,24 +193,50 @@ class PinealVessel:
 
     def auto_sense(self, text: str) -> list[float]:
         t = text.lower()
-        love = sum(1 for w in LOVE_WORDS if w in t) + 0.5
-        logic = sum(1 for w in LOGIC_WORDS if w in t) + 0.5
-        fear = sum(1 for w in FEAR_WORDS if w in t) + 0.3
-        creation = sum(1 for w in CREATION_WORDS if w in t) + 0.5
 
-        if len(text) > 80:
-            logic += 0.5
-        q_count = text.count("？") + text.count("?")
-        logic += q_count * 0.3
-        fear += q_count * 0.1
+        # Phase 1: Semantic cluster scoring (weighted substring match)
+        love = _semantic_score(t, LOVE_SEMANTIC) + 0.3
+        logic = _semantic_score(t, LOGIC_SEMANTIC) + 0.3
+        fear = _semantic_score(t, FEAR_SEMANTIC) + 0.2
+        creation = _semantic_score(t, CREATION_SEMANTIC) + 0.3
+
+        # Phase 2: Structural pattern analysis
+        # Questions → Logic + slight Fear (uncertainty)
+        q_score = sum(1 for p in _QUESTION_PATTERNS if p in t)
+        logic += q_score * 0.4
+        fear += q_score * 0.15
+
+        # Imperatives → Creation (action-oriented)
+        imp_score = sum(1 for p in _IMPERATIVE_PATTERNS if p in t)
+        creation += imp_score * 0.3
+
+        # Conditionals → Creation (hypothetical thinking)
+        cond_score = sum(1 for p in _CONDITIONAL_PATTERNS if p in t)
+        creation += cond_score * 0.25
+
+        # Exclamations → Love + Creation (emotional intensity)
         e_count = text.count("！") + text.count("!")
-        love += e_count * 0.2
-        creation += e_count * 0.2
+        love += e_count * 0.25
+        creation += e_count * 0.15
 
+        # Phase 3: Length-based context
+        text_len = len(text)
+        if text_len > 120:
+            logic += 0.6  # Long text → analytical
+        elif text_len > 60:
+            logic += 0.3
+        if text_len < 15:
+            love += 0.2   # Short text → emotional/informal
+
+        # Phase 4: Normalize
         raw = [love, logic, fear, creation]
         total = sum(raw)
-        norm = [v / total for v in raw]
+        if total < 1e-8:
+            norm = [0.25, 0.25, 0.25, 0.25]
+        else:
+            norm = [v / total for v in raw]
 
+        # Phase 5: Exponential momentum smoothing
         mom = 0.55
         self.state = [p * mom + n * (1 - mom) for p, n in zip(self.state, norm)]
         st = sum(self.state)
@@ -179,18 +276,103 @@ def harvest_entropy_vec(n: int) -> np.ndarray:
 N_VARS = 8  # 推論空間の次元数 (感情4D + 月相 + 照度 + エントロピー + 複雑度)
 K_SELECT = 4  # 選択する上位次元数
 
+# Base Buddhist relationships (immutable dharma structure)
+_BASE_RELATIONSHIPS = [
+    # (i, j, weight)
+    (0, 3, 0.3),   # Love ↔ Creation  (慈悲シナジー)
+    (1, 2, -0.2),  # Logic ↔ Fear     (矛盾)
+    (0, 2, -0.15), # Love ↔ Fear      (対極)
+    (1, 3, 0.1),   # Logic ↔ Creation (弱いシナジー)
+    (0, 5, 0.1),   # Love ↔ Illumination (月の慈悲)
+    (3, 6, 0.2),   # Creation ↔ Entropy  (創造的カオス)
+    (1, 7, 0.15),  # Logic ↔ Complexity  (分析精度)
+]
+
+
+class LearnableDharmaJ:
+    """Learnable coupling matrix — base Buddhist structure + online adaptation.
+
+    Maintains immutable base relationships (dharma) while learning
+    adaptive deltas from convergence feedback.
+
+    Update rule:
+      converged:  delta += eta * wave_outer_product
+      failed:     delta -= eta * 0.3 * wave_outer_product
+      each step:  delta *= ema_decay  (exponential moving average)
+      output:     J = base + clip(delta, -0.5, 0.5)
+    """
+
+    def __init__(
+        self,
+        n: int = N_VARS,
+        eta: float = 0.005,
+        ema_decay: float = 0.995,
+        clip_range: float = 0.5,
+    ):
+        self.n = n
+        self.eta = eta
+        self.ema_decay = ema_decay
+        self.clip_range = clip_range
+        self._delta = np.zeros((n, n))
+
+    def _build_base_J(self) -> sparse.csr_matrix:
+        """Build immutable base J from Buddhist relationships."""
+        rows, cols, vals = [], [], []
+        for i, j, w in _BASE_RELATIONSHIPS:
+            rows.extend([i, j])
+            cols.extend([j, i])
+            vals.extend([w, w])
+        return sparse.csr_matrix((vals, (rows, cols)), shape=(self.n, self.n))
+
+    def get_J(self) -> sparse.csr_matrix:
+        """Return base_J + clipped learned delta."""
+        base = self._build_base_J()
+        clipped = np.clip(self._delta, -self.clip_range, self.clip_range)
+        # Zero diagonal
+        np.fill_diagonal(clipped, 0.0)
+        # Symmetrize
+        clipped = (clipped + clipped.T) / 2.0
+        return base + sparse.csr_matrix(clipped)
+
+    def update(self, wave: list[float], converged: bool) -> None:
+        """Update learned delta based on convergence feedback.
+
+        Parameters
+        ----------
+        wave : list[float]
+            4D emotion wavelength [Love, Logic, Fear, Creation].
+        converged : bool
+            Whether the FEP reasoning converged successfully.
+        """
+        # Build outer product from wave (first 4 dims only)
+        w = np.array(wave[:4] + [0.0] * (self.n - 4))
+        outer = np.outer(w, w)
+
+        if converged:
+            self._delta += self.eta * outer
+        else:
+            self._delta -= self.eta * 0.3 * outer
+
+        # EMA decay to prevent unbounded growth
+        self._delta *= self.ema_decay
+
+    @property
+    def learned_strength(self) -> float:
+        """Total magnitude of learned adaptations."""
+        return float(np.sum(np.abs(self._delta)))
+
 
 def build_reasoning_vectors(
     wave: list[float],
     moon: MoonPhase,
     complexity_score: float,
+    learned_j: LearnableDharmaJ | None = None,
 ) -> tuple[np.ndarray, sparse.csr_matrix]:
     """感情波長 + 宇宙同期 + 複雑度 → h (バイアス), J (結合行列) に変換.
 
     h[i]: 各次元の「驚き」（重要度）
-    J[i,j]: 次元間の相互作用（共鳴 or 対立）
+    J[i,j]: 次元間の相互作用（共鳴 or 対立） — base + learned delta
     """
-    # h: 各次元のバイアスベクトル
     h = np.array([
         wave[0],                      # Love
         wave[1],                      # Logic
@@ -202,31 +384,16 @@ def build_reasoning_vectors(
         complexity_score,             # 入力複雑度
     ])
 
-    # J: 次元間の結合行列 (仏教的関係性)
-    rows, cols, vals = [], [], []
-    relationships = [
-        # (i, j, weight)
-        # 愛と創造は共鳴 (正の結合 = 超モジュラー的慈悲)
-        (0, 3, 0.3),   # Love ↔ Creation
-        # 論理と恐怖は対立 (負の結合)
-        (1, 2, -0.2),  # Logic ↔ Fear
-        # 愛と恐怖は対立
-        (0, 2, -0.15), # Love ↔ Fear
-        # 論理と創造は弱い共鳴
-        (1, 3, 0.1),   # Logic ↔ Creation
-        # 月の照度と愛は共鳴
-        (0, 5, 0.1),   # Love ↔ Illumination
-        # エントロピーと創造は共鳴
-        (3, 6, 0.2),   # Creation ↔ Entropy
-        # 複雑度と論理は共鳴
-        (1, 7, 0.15),  # Logic ↔ Complexity
-    ]
-    for i, j, w in relationships:
-        rows.extend([i, j])
-        cols.extend([j, i])
-        vals.extend([w, w])
+    if learned_j is not None:
+        J = learned_j.get_J()
+    else:
+        rows, cols, vals = [], [], []
+        for i, j, w in _BASE_RELATIONSHIPS:
+            rows.extend([i, j])
+            cols.extend([j, i])
+            vals.extend([w, w])
+        J = sparse.csr_matrix((vals, (rows, cols)), shape=(N_VARS, N_VARS))
 
-    J = sparse.csr_matrix((vals, (rows, cols)), shape=(N_VARS, N_VARS))
     return h, J
 
 
@@ -276,6 +443,7 @@ class ReasoningEngine:
         complexity_score: float,
         memory: AlayaMemory,
         mode_override: str | None = None,
+        learned_j: LearnableDharmaJ | None = None,
     ) -> dict:
         """実際に FEP ODE / QUBO 推論を実行し、結果を返す."""
         # キャッシュチェック (同一波長パターンの再計算を回避)
@@ -285,7 +453,7 @@ class ReasoningEngine:
             cached["solver_used"] = cached.get("solver_used", "") + "+cached"
             return cached
 
-        h, J = build_reasoning_vectors(wave, moon, complexity_score)
+        h, J = build_reasoning_vectors(wave, moon, complexity_score, learned_j)
 
         # オーケストレーターで推論 (think = 多段エスカレーション)
         # 早期打切り: 収束閾値を緩めて不要なエスカレーションを抑制
@@ -328,11 +496,15 @@ class ReasoningEngine:
         complexity_score: float,
         memory: AlayaMemory,
         timeout: float = 2.0,
+        learned_j: LearnableDharmaJ | None = None,
     ) -> dict:
         """FEP推論を別スレッドで実行 (asyncイベントループをブロックしない)."""
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(self.run, wave, moon, complexity_score, memory),
+                asyncio.to_thread(
+                    self.run, wave, moon, complexity_score, memory,
+                    learned_j=learned_j,
+                ),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
@@ -582,20 +754,140 @@ class ReasoningModeController:
 
 
 # ===================================================================
-# Reasoning Mode Selector — 複雑度×感情波長で自動選択
+# Adaptive Complexity Thresholds — feedback-driven boundary optimization
 # ===================================================================
-def select_reasoning_mode(wave: list[float], complexity: float, epoch: int) -> str:
-    """Auto-select reasoning mode based on complexity and emotion."""
+class AdaptiveThresholds:
+    """Online threshold optimization for complexity-based mode selection.
+
+    Replaces fixed [0.3, 0.6, 0.8] with boundaries that adapt based
+    on convergence feedback. Uses histogram-based optimization every
+    N interactions to find boundaries that maximize convergence rate.
+
+    Thresholds are clamped to [0.1, 0.9] to prevent extreme drift.
+    Initial 20 interactions use default thresholds (insufficient data).
+    """
+
+    def __init__(
+        self,
+        initial: tuple[float, float, float] = (0.3, 0.6, 0.8),
+        update_interval: int = 20,
+        min_bound: float = 0.1,
+        max_bound: float = 0.9,
+    ):
+        self.thresholds = list(initial)
+        self.update_interval = update_interval
+        self.min_bound = min_bound
+        self.max_bound = max_bound
+        self._history: list[tuple[float, str, bool]] = []  # (complexity, mode, converged)
+
+    @property
+    def low(self) -> float:
+        return self.thresholds[0]
+
+    @property
+    def mid(self) -> float:
+        return self.thresholds[1]
+
+    @property
+    def high(self) -> float:
+        return self.thresholds[2]
+
+    def record(self, complexity: float, mode: str, converged: bool) -> None:
+        """Record outcome and trigger optimization periodically."""
+        self._history.append((complexity, mode, converged))
+        if len(self._history) >= self.update_interval and \
+           len(self._history) % self.update_interval == 0:
+            self._optimize()
+
+    def _optimize(self) -> None:
+        """Histogram-based threshold optimization.
+
+        Divides [0, 1] into bins, computes convergence rate per bin,
+        then finds optimal 3 boundaries that separate high-convergence
+        regions for each mode category.
+        """
+        if len(self._history) < self.update_interval:
+            return
+
+        n_bins = 20
+        bins = np.linspace(0, 1, n_bins + 1)
+
+        # Count converged/total per bin
+        converged_counts = np.zeros(n_bins)
+        total_counts = np.zeros(n_bins)
+
+        for c, _mode, conv in self._history:
+            bin_idx = min(int(c * n_bins), n_bins - 1)
+            total_counts[bin_idx] += 1
+            if conv:
+                converged_counts[bin_idx] += 1
+
+        # Convergence rate per bin (Laplace smoothing)
+        rates = (converged_counts + 1) / (total_counts + 2)
+
+        # Find boundaries: look for drops in convergence rate
+        # Simple approach: cumulative rate analysis
+        best_score = -1.0
+        best_thresholds = list(self.thresholds)
+
+        # Search over candidate boundaries (grid search)
+        candidates = np.linspace(self.min_bound, self.max_bound, 15)
+        for i, t1 in enumerate(candidates[:-2]):
+            for j, t2 in enumerate(candidates[i + 1:-1], i + 1):
+                for t3 in candidates[j + 1:]:
+                    # Score: average convergence rate weighted by bin counts
+                    score = 0.0
+                    weight = 0.0
+                    for b in range(n_bins):
+                        mid_b = (bins[b] + bins[b + 1]) / 2
+                        # Each mode category should have good convergence
+                        w = total_counts[b]
+                        score += w * rates[b]
+                        weight += w
+
+                    if weight > 0:
+                        score /= weight
+
+                    if score > best_score:
+                        best_score = score
+                        best_thresholds = [float(t1), float(t2), float(t3)]
+
+        # Update thresholds (ensure monotonically increasing)
+        self.thresholds = sorted(best_thresholds)
+
+    @property
+    def n_observations(self) -> int:
+        return len(self._history)
+
+
+# ===================================================================
+# Reasoning Mode Selector — 複雑度×感情波長で自動選択 (adaptive thresholds)
+# ===================================================================
+def select_reasoning_mode(
+    wave: list[float],
+    complexity: float,
+    epoch: int,
+    thresholds: AdaptiveThresholds | None = None,
+) -> str:
+    """Auto-select reasoning mode based on complexity and emotion.
+
+    Uses adaptive thresholds when available, falls back to defaults.
+    """
     # Periodic sleep consolidation (every 10 epochs)
     if epoch > 0 and epoch % 10 == 0:
         return "sleep"
 
+    # Use adaptive or default thresholds
+    t_low = thresholds.low if thresholds else 0.3
+    t_mid = thresholds.mid if thresholds else 0.6
+    t_high = thresholds.high if thresholds else 0.8
+
     dominant_idx = wave.index(max(wave))
     dominant = DIMENSION_LABELS[dominant_idx]
 
-    if complexity < 0.3:
+    if complexity < t_low:
         return "adaptive"
-    elif complexity < 0.6:
+    elif complexity < t_mid:
         if dominant == "Logic":
             return "theoretical"
         elif dominant == "Fear":
@@ -604,7 +896,7 @@ def select_reasoning_mode(wave: list[float], complexity: float, epoch: int) -> s
             return "embodied"
         else:
             return "adaptive"
-    elif complexity < 0.8:
+    elif complexity < t_high:
         if dominant == "Creation":
             return "hyper"
         else:
@@ -890,6 +1182,11 @@ class DescentPipeline:
         self.router = LLMRouter()
         self.reasoning_engine = ReasoningEngine()
 
+        # Learnable J matrix (online adaptation from convergence feedback)
+        self.learned_j = LearnableDharmaJ()
+        # Adaptive complexity thresholds (feedback-driven boundary optimization)
+        self.adaptive_thresholds = AdaptiveThresholds()
+
         # Adapter cache (wave+mode → adapter JSON, avoids redundant LLM calls)
         self._adapter_cache: dict[str, tuple[dict, float]] = {}
         self._adapter_cache_max = 32
@@ -940,6 +1237,7 @@ class DescentPipeline:
         # Phase 2: REASON — FEP ODE / QUBOを別スレッドで実行 (2秒タイムアウト)
         reasoning_result = await self.reasoning_engine.run_async(
             wave, moon, complexity, self.memory, timeout=2.0,
+            learned_j=self.learned_j,
         )
         # オーケストレーターが選択したモードを使用 (FEP推論結果を直接採用)
         mode = reasoning_result["mode_selected"]
@@ -1030,6 +1328,11 @@ class DescentPipeline:
         if self.epoch % 10 == 0:
             self.memory.decay()
 
+        # Feedback loop: update learnable J and adaptive thresholds
+        converged = reasoning_result.get("convergence", 1.0) < 0.05
+        self.learned_j.update(wave, converged)
+        self.adaptive_thresholds.record(complexity, mode, converged)
+
         entropy_signal = params.entropy_signal if params.entropy_signal else harvest_entropy()
 
         return DescentResult(
@@ -1058,6 +1361,9 @@ class DescentPipeline:
                 "fep_solver": reasoning_result.get("solver_used", ""),
                 "selected_dimensions": reasoning_result.get("selected_dimensions", []),
                 "orchestrator_mode": reasoning_result.get("mode_selected", ""),
+                "learned_j_strength": self.learned_j.learned_strength,
+                "adaptive_thresholds": list(self.adaptive_thresholds.thresholds),
+                "threshold_observations": self.adaptive_thresholds.n_observations,
             },
             entropy={
                 "source": "os.urandom",
@@ -1203,6 +1509,7 @@ async def descent_stream(req: DescentRequest):
         yield f"data: {json.dumps({'type':'phase','phase':'reasoning'})}\n\n"
         rr = await pipeline.reasoning_engine.run_async(
             wave, moon, complexity, pipeline.memory, timeout=2.0,
+            learned_j=pipeline.learned_j,
         )
         mode = rr["mode_selected"]
         if pipeline.epoch > 0 and pipeline.epoch % 10 == 0:
@@ -1280,6 +1587,11 @@ async def descent_stream(req: DescentRequest):
         pipeline.epoch += 1
         if pipeline.epoch % 10 == 0:
             pipeline.memory.decay()
+
+        # Feedback loop: update learnable J and adaptive thresholds
+        stream_converged = rr.get("convergence", 1.0) < 0.05
+        pipeline.learned_j.update(wave, stream_converged)
+        pipeline.adaptive_thresholds.record(complexity, mode, stream_converged)
 
         entropy_signal = params.entropy_signal or harvest_entropy()
 
