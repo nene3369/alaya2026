@@ -1,10 +1,10 @@
-# LMM - Classical QUBO Optimizer
+# LMM — Surprise-based Top-K Selection via QUBO
 
-> [English](README_en.md) | [中文](README_zh.md) | [한국어](README_ko.md) | [Español](README_es.md) | [हिन्दी](README_hi.md) | [Français](README_fr.md) | [বাংলা](README_bn.md) | [தமிழ்](README_ta.md) | [తెలుగు](README_te.md) | [मराठी](README_mr.md) | [‎اردو‎](README_ur.md) | [ગુજરાતી](README_gu.md) | [ಕನ್ನಡ](README_kn.md) | [മലയാളം](README_ml.md) | [ਪੰਜਾਬੀ](README_pa.md)
+> [English](README_en.md) | [中文](README_zh.md) | [한국어](README_ko.md) | [Español](README_es.md) | [हिन्दी](README_hi.md) | [Français](README_fr.md) | [বাংলা](README_bn.md) | [தமிழ்](README_ta.md) | [తెలుగు](README_te.md) | [मराठी](README_mr.md) | [‎اردو‎](README_ur.md) | [ગુજરાતી](README_gu.md) | [ಕನ್ನಡ](README_kn.md) | [മലయാളം](README_ml.md) | [ਪੰਜਾਬੀ](README_pa.md)
 
-D-Wave量子コンピュータ不要の古典的QUBO最適化ライブラリ。
+**情報量（サプライズ）が高い上位K件を、QUBO最適化で選ぶ。** 量子コンピュータ不要 — SA・Ising SA・貪欲法の古典ソルバーで動く。
 
-サプライズ（情報量）ベースでデータ選択を最適化する。
+> **ひとことで:** n個の候補からサプライズ×多様性を最大化するK個を選ぶ。QUBO行列を構築し、古典ソルバーで解く。D-Wave不要。
 
 ## 構造
 
@@ -121,8 +121,17 @@ lmm --input data.npy --k 5 --method greedy
 
 ### パフォーマンス
 
-- 高速化率: 2.6x
-- 解の質向上 (より低いエネルギー)
+ベンチマーク条件: `seed=42`, `n=1000`, `k=10`, `sa_iterations=5000` (Python 3.10, numpy 1.24, scipy 1.10)
+
+```bash
+# 再現コマンド
+python benchmarks/run_benchmarks.py        # コアソルバー性能
+python benchmarks/bench_dharma.py          # Dharma-Algebra性能
+python benchmarks/bench_fep_vs_sa.py       # FEP vs SA比較
+```
+
+- 高速化率: 2.6x（ベースライン: 密行列SA vs スパース+Ising SA）
+- 解の質向上（より低いエネルギー）
 
 ### DharmaLMM使用例
 
