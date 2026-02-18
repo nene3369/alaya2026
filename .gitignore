@@ -6,7 +6,10 @@ build/
 .eggs/
 *.egg
 .venv/
-.claude/
+.claude/*
+!.claude/hooks/
+!.claude/hooks/**
+!.claude/settings.json
 .coverage
 coverage.xml
 htmlcov/
