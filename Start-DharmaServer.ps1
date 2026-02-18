@@ -100,7 +100,7 @@ while ($retryCount -lt $MaxRetries) {
 
     # --- TIME_WAIT Meditation — ポートが完全解放されるまで待機 ---
     $waited = $false
-    while (netstat -ano 2>$null | Select-String ":${Port}\s.*LISTENING") {
+    while (netstat -ano 2>$null | Select-String ":${Port}\s.*(LISTENING|TIME_WAIT|CLOSE_WAIT)") {
         if (-not $waited) {
             Write-Log "WARN" "Port $Port still bound (TIME_WAIT). Meditating..."
             $waited = $true
@@ -111,8 +111,9 @@ while ($retryCount -lt $MaxRetries) {
 
     $retryCount++
     if ($retryCount -lt $MaxRetries) {
-        Write-Log "INFO" "Restarting in ${RetryDelaySec}s... ($retryCount/$MaxRetries)"
-        Start-Sleep -Seconds $RetryDelaySec
+        $delay = [Math]::Min(120, $RetryDelaySec * [Math]::Pow(2, ($retryCount - 1)))
+        Write-Log "INFO" "Restarting in ${delay}s... ($retryCount/$MaxRetries)"
+        Start-Sleep -Seconds $delay
     }
 }
 
