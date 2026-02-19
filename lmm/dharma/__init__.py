@@ -19,8 +19,13 @@ from lmm.dharma.topology import (
     evaluate_engine_result,
 )
 from lmm.dharma.topology_ast import (
+    ChangeImpactAnalyzer,
+    ChangeImpactReport,
+    ModuleHealthReport,
+    build_and_analyze,
     build_gprec_from_codebase,
     compare_codebases,
+    compute_module_health,
     get_cached_gprec,
 )
 
@@ -54,4 +59,10 @@ __all__ = [
     "build_gprec_from_codebase",
     "get_cached_gprec",
     "compare_codebases",
+    # v7.0 — Self-Awareness (Change Impact Analysis)
+    "ChangeImpactAnalyzer",
+    "ChangeImpactReport",
+    "ModuleHealthReport",
+    "compute_module_health",
+    "build_and_analyze",
 ]

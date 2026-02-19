@@ -2,6 +2,11 @@
 
 Diversity-aware components implementing LangChain base classes.
 Uses submodular optimization for (1-1/e) approximation guarantee.
+
+Also provides tool bridge adapters (:func:`langchain_tool_to_lmm`,
+:func:`lmm_tool_to_langchain`, :func:`register_langchain_tools`) and
+:class:`DharmaRunnable` for bridging LangChain's tool ecosystem into
+the LMM Tool protocol.
 """
 
 from __future__ import annotations
@@ -284,3 +289,229 @@ class DharmaRetriever:
     def get_relevant_documents(self, query: str, **kwargs) -> list:
         """Legacy API compatibility."""
         return self.invoke(query, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Tool Bridge — LangChain ↔ LMM Tool protocol
+# ---------------------------------------------------------------------------
+
+
+class _LangChainToolWrapper:
+    """Adapts a LangChain BaseTool to the LMM Tool protocol.
+
+    Satisfies ``isinstance(wrapper, Tool)`` via the runtime-checkable protocol
+    defined in :mod:`lmm.tools.base`.
+    """
+
+    def __init__(
+        self,
+        lc_tool: Any,
+        category: str,
+        sandbox: Any | None,
+    ):
+        self._tool = lc_tool
+        self._category = category
+        self._sandbox = sandbox
+
+    @property
+    def name(self) -> str:
+        return getattr(self._tool, "name", "langchain_tool")
+
+    @property
+    def description(self) -> str:
+        return getattr(self._tool, "description", "")
+
+    @property
+    def category(self) -> str:
+        return self._category
+
+    async def execute(self, params: dict[str, Any]) -> Any:
+        from lmm.tools.base import ToolResult, ToolStatus
+
+        if self._sandbox is not None:
+            violation = self._sandbox.validate(self.name, params)
+            if violation:
+                return ToolResult(status=ToolStatus.DENIED, error=violation)
+        try:
+            if hasattr(self._tool, "ainvoke"):
+                result = await self._tool.ainvoke(params)
+            else:
+                import asyncio
+                result = await asyncio.to_thread(self._tool.invoke, params)
+            return ToolResult(
+                status=ToolStatus.SUCCESS,
+                output=result,
+                relevance_score=0.5,
+            )
+        except Exception as exc:
+            return ToolResult(status=ToolStatus.ERROR, error=str(exc))
+
+
+def langchain_tool_to_lmm(
+    lc_tool: Any,
+    *,
+    category: str = "langchain",
+    sandbox_policy: Any | None = None,
+) -> Any:
+    """Wrap a LangChain BaseTool as an LMM Tool protocol object.
+
+    The returned wrapper satisfies the :class:`~lmm.tools.base.Tool`
+    protocol and can be registered in a :class:`~lmm.tools.base.ToolRegistry`.
+
+    Parameters
+    ----------
+    lc_tool : langchain_core.tools.BaseTool
+        A LangChain tool instance.
+    category : str
+        Category string for the LMM registry.
+    sandbox_policy : SandboxPolicy | None
+        Optional sandbox constraints.
+
+    Returns
+    -------
+    An object satisfying the lmm.tools.base.Tool protocol.
+    """
+    sandbox = None
+    if sandbox_policy is not None:
+        from lmm.tools.base import ToolSandbox
+        sandbox = ToolSandbox(sandbox_policy)
+    return _LangChainToolWrapper(lc_tool, category, sandbox)
+
+
+def lmm_tool_to_langchain(tool: Any) -> Any:
+    """Wrap an LMM Tool protocol object as a LangChain BaseTool.
+
+    Requires ``langchain-core`` to be installed.
+
+    Parameters
+    ----------
+    tool : lmm.tools.base.Tool
+        An LMM Tool protocol object.
+
+    Returns
+    -------
+    langchain_core.tools.BaseTool instance.
+    """
+    _check_langchain()
+    from langchain_core.tools import BaseTool as LCBaseTool
+
+    from lmm.tools.base import ToolStatus
+
+    tool_name = tool.name
+    tool_desc = tool.description
+
+    class _LMMToolAsLangChain(LCBaseTool):
+        name: str = tool_name  # type: ignore[assignment]
+        description: str = tool_desc  # type: ignore[assignment]
+
+        def _run(self, **kwargs: Any) -> str:
+            import asyncio
+            result = asyncio.run(tool.execute(kwargs))
+            if result.status == ToolStatus.SUCCESS:
+                return str(result.output)
+            return f"Error: {result.error}"
+
+        async def _arun(self, **kwargs: Any) -> str:
+            result = await tool.execute(kwargs)
+            if result.status == ToolStatus.SUCCESS:
+                return str(result.output)
+            return f"Error: {result.error}"
+
+    return _LMMToolAsLangChain()
+
+
+def register_langchain_tools(
+    tools: list[Any],
+    registry: Any,
+    *,
+    category: str = "langchain",
+    sandbox_policy: Any | None = None,
+) -> int:
+    """Register multiple LangChain tools into an LMM ToolRegistry.
+
+    Parameters
+    ----------
+    tools : list of LangChain BaseTool instances.
+    registry : lmm.tools.base.ToolRegistry
+    category : category tag for all imported tools.
+    sandbox_policy : optional sandbox constraints.
+
+    Returns
+    -------
+    int : number of tools successfully registered.
+    """
+    count = 0
+    for lc_tool in tools:
+        try:
+            wrapper = langchain_tool_to_lmm(
+                lc_tool, category=category, sandbox_policy=sandbox_policy,
+            )
+            registry.register(wrapper)
+            count += 1
+        except Exception:
+            pass
+    return count
+
+
+class DharmaRunnable:
+    """Wrap a LangChain Runnable as an LMM Tool.
+
+    Allows any LangChain chain/pipeline to be executed through the
+    LMM ToolRegistry / ToolExecutor system with sandboxing.
+
+    Satisfies the :class:`~lmm.tools.base.Tool` protocol.
+
+    Parameters
+    ----------
+    runnable : Any
+        A LangChain Runnable (chain, pipeline, etc.).
+    name : str
+        Tool name for the registry.
+    description : str
+        Human-readable description.
+    category : str
+        Category tag.
+    """
+
+    def __init__(
+        self,
+        runnable: Any,
+        name: str = "langchain_chain",
+        description: str = "LangChain Runnable pipeline",
+        category: str = "langchain",
+    ):
+        self._runnable = runnable
+        self._name = name
+        self._description = description
+        self._category = category
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def description(self) -> str:
+        return self._description
+
+    @property
+    def category(self) -> str:
+        return self._category
+
+    async def execute(self, params: dict[str, Any]) -> Any:
+        from lmm.tools.base import ToolResult, ToolStatus
+
+        try:
+            if hasattr(self._runnable, "ainvoke"):
+                result = await self._runnable.ainvoke(params)
+            else:
+                import asyncio
+                result = await asyncio.to_thread(
+                    self._runnable.invoke, params,
+                )
+            return ToolResult(
+                status=ToolStatus.SUCCESS,
+                output=result,
+                relevance_score=0.5,
+            )
+        except Exception as exc:
+            return ToolResult(status=ToolStatus.ERROR, error=str(exc))

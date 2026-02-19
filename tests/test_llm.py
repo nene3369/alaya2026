@@ -6,7 +6,12 @@ import numpy as np
 import pytest
 
 from lmm.llm.embeddings import EmbeddingAdapter, auto_embed, cosine_similarity, ngram_vectors
-from lmm.llm.drift import DriftDetector
+from lmm.llm.drift import (
+    DriftDetector,
+    MemoryDecayAdvisor,
+    SemanticDriftDetector,
+    SemanticDriftReport,
+)
 from lmm.llm.fewshot import FewShotSelector
 from lmm.llm.reranker import OutputReranker
 from lmm.llm.sampler import PinealSampler
@@ -118,3 +123,187 @@ class TestPinealSampler:
         sampler.sample(logits)
         report = sampler.report()
         assert report.n_tokens_sampled == 1
+
+
+# ===================================================================
+# SemanticDriftDetector (Anicca / 諸行無常)
+# ===================================================================
+
+
+class TestSemanticDriftDetector:
+    def test_fit_baseline(self):
+        rng = np.random.RandomState(42)
+        det = SemanticDriftDetector()
+        baseline = rng.randn(50, 8)
+        det.fit_baseline(baseline)
+        assert det._fitted
+        assert det._baseline_centroid.shape == (8,)
+
+    def test_no_drift_on_similar_data(self):
+        rng = np.random.RandomState(42)
+        baseline = rng.randn(100, 8)
+        det = SemanticDriftDetector(threshold=0.8)
+        det.fit_baseline(baseline)
+
+        # Feed data from the same distribution (larger sample for stability)
+        for _ in range(100):
+            det.update(rng.randn(8))
+
+        report = det.check()
+        assert isinstance(report, SemanticDriftReport)
+        assert not report.is_drifting
+
+    def test_detects_centroid_shift(self):
+        rng = np.random.RandomState(42)
+        baseline = rng.randn(100, 8)
+        det = SemanticDriftDetector(threshold=0.1)
+        det.fit_baseline(baseline)
+
+        # Feed data from a shifted distribution (large offset)
+        shifted = rng.randn(100, 8) + 10.0
+        det.update_batch(shifted)
+        report = det.check()
+        assert report.centroid_shift > 0.1
+        assert report.is_drifting
+
+    def test_detects_variance_change(self):
+        rng = np.random.RandomState(42)
+        baseline = rng.randn(100, 8)
+        det = SemanticDriftDetector(threshold=0.05, variance_weight=0.8,
+                                    centroid_weight=0.1, cosine_weight=0.1)
+        det.fit_baseline(baseline)
+
+        # Feed data with much higher variance
+        high_var = rng.randn(100, 8) * 10.0
+        det.update_batch(high_var)
+        report = det.check()
+        assert report.variance_ratio > 5.0
+
+    def test_update_single(self):
+        rng = np.random.RandomState(42)
+        det = SemanticDriftDetector()
+        det.fit_baseline(rng.randn(20, 4))
+        report = det.update(rng.randn(4))
+        assert report.n_observations == 1
+        assert report.window_size == 1
+
+    def test_update_batch(self):
+        rng = np.random.RandomState(42)
+        det = SemanticDriftDetector()
+        det.fit_baseline(rng.randn(20, 4))
+        report = det.update_batch(rng.randn(10, 4))
+        assert report.n_observations == 10
+        assert report.window_size == 10
+
+    def test_identify_stale_patterns(self):
+        rng = np.random.RandomState(42)
+        det = SemanticDriftDetector()
+        det.fit_baseline(rng.randn(20, 8))
+
+        # Window is centered near origin, stale patterns far away
+        for _ in range(20):
+            det.update(rng.randn(8) * 0.1)
+
+        # Build patterns array row-by-row (vendored numpy doesn't support int setitem)
+        row0 = list(rng.randn(8).flatten() * 0.1)   # close to window centroid
+        row1 = [100.0] * 8                            # far away
+        row2 = [-100.0] * 8                           # far away
+        row3 = list(rng.randn(8).flatten() * 0.1)   # close
+        row4 = [50.0] * 8                             # far
+        patterns = np.array([row0, row1, row2, row3, row4])
+
+        stale = det.identify_stale_patterns(patterns, top_k=3)
+        assert len(stale) == 3
+        # The patterns far from centroid should rank as most stale
+        assert 1 in stale or 2 in stale
+
+    def test_reset_baseline_promotes_window(self):
+        rng = np.random.RandomState(42)
+        det = SemanticDriftDetector()
+        det.fit_baseline(rng.randn(20, 4))
+        for _ in range(10):
+            det.update(rng.randn(4) + 5.0)
+
+        det.reset_baseline()
+        assert det._n_observations == 0
+        assert len(det._window) == 0
+        # Baseline centroid should now be near the shifted data
+        assert det._baseline_centroid is not None
+
+    def test_unfitted_raises(self):
+        det = SemanticDriftDetector()
+        try:
+            det.update(np.zeros(4))
+            assert False, "Should have raised RuntimeError"
+        except RuntimeError:
+            pass
+
+    def test_check_empty_window(self):
+        rng = np.random.RandomState(42)
+        det = SemanticDriftDetector()
+        det.fit_baseline(rng.randn(10, 4))
+        report = det.check()
+        assert report.drift_score == 0.0
+        assert report.window_size == 0
+
+
+# ===================================================================
+# MemoryDecayAdvisor
+# ===================================================================
+
+
+class TestMemoryDecayAdvisor:
+    def test_stable_returns_base_rate(self):
+        rng = np.random.RandomState(42)
+        det = SemanticDriftDetector(threshold=0.5)
+        det.fit_baseline(rng.randn(50, 8))
+        for _ in range(20):
+            det.update(rng.randn(8))
+
+        advisor = MemoryDecayAdvisor(det, base_decay_rate=0.01)
+        rate = advisor.compute_decay_rate()
+        assert rate == pytest.approx(0.01)
+
+    def test_drifting_returns_elevated_rate(self):
+        rng = np.random.RandomState(42)
+        det = SemanticDriftDetector(threshold=0.05)
+        det.fit_baseline(rng.randn(50, 8))
+        # Shift distribution far away
+        for _ in range(50):
+            det.update(rng.randn(8) + 20.0)
+
+        advisor = MemoryDecayAdvisor(
+            det, base_decay_rate=0.01, drift_decay_multiplier=5.0,
+        )
+        rate = advisor.compute_decay_rate()
+        assert rate > 0.01
+
+    def test_pattern_weights_stale_low(self):
+        rng = np.random.RandomState(42)
+        det = SemanticDriftDetector()
+        det.fit_baseline(rng.randn(20, 4))
+        # Window near origin
+        for _ in range(20):
+            det.update(rng.randn(4) * 0.1)
+
+        advisor = MemoryDecayAdvisor(det)
+        # Use a pattern aligned with centroid vs one opposite
+        patterns = np.array([
+            [100.0, 100.0, 100.0, 100.0],   # one direction
+            [-100.0, -100.0, -100.0, -100.0],  # opposite direction
+        ])
+        weights = advisor.compute_pattern_weights(patterns)
+        assert weights.shape == (2,)
+        # Weights should differ for opposite-direction patterns
+        assert float(weights[0]) != float(weights[1])
+
+    def test_pattern_weights_empty_window(self):
+        rng = np.random.RandomState(42)
+        det = SemanticDriftDetector()
+        det.fit_baseline(rng.randn(10, 4))
+
+        advisor = MemoryDecayAdvisor(det)
+        patterns = rng.randn(5, 4)
+        weights = advisor.compute_pattern_weights(patterns)
+        # Empty window returns all ones
+        assert np.allclose(weights, 1.0)

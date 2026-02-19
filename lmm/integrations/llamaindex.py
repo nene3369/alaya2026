@@ -3,6 +3,11 @@
 Diversity-aware node postprocessor implementing LlamaIndex BaseNodePostprocessor.
 Uses submodular optimization for (1-1/e) approximation guarantee, or
 FEP analog neuromorphic KCL ODE solver for deterministic convergence.
+
+Also provides tool bridge adapters (:func:`llamaindex_tool_to_lmm`,
+:func:`lmm_tool_to_llamaindex`, :func:`register_llamaindex_tools`) and
+:class:`DharmaQueryEngineTool` for bridging LlamaIndex's tool ecosystem
+into the LMM Tool protocol.
 """
 
 from __future__ import annotations
@@ -307,3 +312,242 @@ def DharmaNodePostprocessor(**kwargs: Any) -> Any:
     """
     cls = get_dharma_postprocessor_class()
     return cls(**kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Tool Bridge — LlamaIndex ↔ LMM Tool protocol
+# ---------------------------------------------------------------------------
+
+
+class _LlamaIndexToolWrapper:
+    """Adapts a LlamaIndex tool to the LMM Tool protocol.
+
+    Handles both ``FunctionTool`` (with ``metadata.name``/``metadata.description``)
+    and simpler tool-like objects with ``name``/``description`` attributes.
+    """
+
+    def __init__(
+        self,
+        li_tool: Any,
+        category: str,
+        sandbox: Any | None,
+    ):
+        self._tool = li_tool
+        self._category = category
+        self._sandbox = sandbox
+
+    @property
+    def name(self) -> str:
+        metadata = getattr(self._tool, "metadata", None)
+        if metadata and hasattr(metadata, "name"):
+            return metadata.name
+        return getattr(self._tool, "name", "llamaindex_tool")
+
+    @property
+    def description(self) -> str:
+        metadata = getattr(self._tool, "metadata", None)
+        if metadata and hasattr(metadata, "description"):
+            return metadata.description
+        return getattr(self._tool, "description", "")
+
+    @property
+    def category(self) -> str:
+        return self._category
+
+    async def execute(self, params: dict[str, Any]) -> Any:
+        from lmm.tools.base import ToolResult, ToolStatus
+
+        if self._sandbox is not None:
+            violation = self._sandbox.validate(self.name, params)
+            if violation:
+                return ToolResult(status=ToolStatus.DENIED, error=violation)
+        try:
+            if hasattr(self._tool, "acall"):
+                result = await self._tool.acall(**params)
+            elif hasattr(self._tool, "call"):
+                import asyncio
+                result = await asyncio.to_thread(self._tool.call, **params)
+            elif callable(self._tool):
+                import asyncio
+                result = await asyncio.to_thread(self._tool, **params)
+            else:
+                return ToolResult(
+                    status=ToolStatus.ERROR,
+                    error="Tool has no callable interface",
+                )
+            return ToolResult(
+                status=ToolStatus.SUCCESS,
+                output=str(result),
+                relevance_score=0.5,
+            )
+        except Exception as exc:
+            return ToolResult(status=ToolStatus.ERROR, error=str(exc))
+
+
+def llamaindex_tool_to_lmm(
+    li_tool: Any,
+    *,
+    category: str = "llamaindex",
+    sandbox_policy: Any | None = None,
+) -> Any:
+    """Wrap a LlamaIndex tool as an LMM Tool protocol object.
+
+    The returned wrapper satisfies the :class:`~lmm.tools.base.Tool`
+    protocol and can be registered in a :class:`~lmm.tools.base.ToolRegistry`.
+
+    Handles both ``FunctionTool`` and ``QueryEngineTool`` from LlamaIndex.
+
+    Parameters
+    ----------
+    li_tool : LlamaIndex tool instance.
+    category : str
+        Category string for the LMM registry.
+    sandbox_policy : SandboxPolicy | None
+        Optional sandbox constraints.
+
+    Returns
+    -------
+    An object satisfying the lmm.tools.base.Tool protocol.
+    """
+    sandbox = None
+    if sandbox_policy is not None:
+        from lmm.tools.base import ToolSandbox
+        sandbox = ToolSandbox(sandbox_policy)
+    return _LlamaIndexToolWrapper(li_tool, category, sandbox)
+
+
+def lmm_tool_to_llamaindex(tool: Any) -> Any:
+    """Wrap an LMM Tool protocol object as a LlamaIndex FunctionTool.
+
+    Requires ``llama-index-core`` to be installed.
+
+    Parameters
+    ----------
+    tool : lmm.tools.base.Tool
+        An LMM Tool protocol object.
+
+    Returns
+    -------
+    llama_index.core.tools.FunctionTool instance.
+    """
+    _check_llamaindex()
+    from llama_index.core.tools import FunctionTool
+
+    from lmm.tools.base import ToolStatus
+
+    def _sync_call(**kwargs: Any) -> str:
+        import asyncio
+        result = asyncio.run(tool.execute(kwargs))
+        if result.status == ToolStatus.SUCCESS:
+            return str(result.output)
+        return f"Error: {result.error}"
+
+    return FunctionTool.from_defaults(
+        fn=_sync_call,
+        name=tool.name,
+        description=tool.description,
+    )
+
+
+def register_llamaindex_tools(
+    tools: list[Any],
+    registry: Any,
+    *,
+    category: str = "llamaindex",
+    sandbox_policy: Any | None = None,
+) -> int:
+    """Register multiple LlamaIndex tools into an LMM ToolRegistry.
+
+    Parameters
+    ----------
+    tools : list of LlamaIndex tool instances.
+    registry : lmm.tools.base.ToolRegistry
+    category : category tag for all imported tools.
+    sandbox_policy : optional sandbox constraints.
+
+    Returns
+    -------
+    int : number of tools successfully registered.
+    """
+    count = 0
+    for li_tool in tools:
+        try:
+            wrapper = llamaindex_tool_to_lmm(
+                li_tool, category=category, sandbox_policy=sandbox_policy,
+            )
+            registry.register(wrapper)
+            count += 1
+        except Exception:
+            pass
+    return count
+
+
+class DharmaQueryEngineTool:
+    """Wrap a LlamaIndex QueryEngine as an LMM Tool.
+
+    Allows query engines (RAG pipelines, knowledge graphs, etc.)
+    to be used through the LMM ToolRegistry system.
+
+    Satisfies the :class:`~lmm.tools.base.Tool` protocol.
+
+    Parameters
+    ----------
+    query_engine : Any
+        A LlamaIndex QueryEngine instance with a ``query()`` method.
+    name : str
+        Tool name for the registry.
+    description : str
+        Human-readable description.
+    category : str
+        Category tag.
+    """
+
+    def __init__(
+        self,
+        query_engine: Any,
+        name: str = "query_engine",
+        description: str = "LlamaIndex query engine",
+        category: str = "llamaindex",
+    ):
+        self._engine = query_engine
+        self._name = name
+        self._description = description
+        self._category = category
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def description(self) -> str:
+        return self._description
+
+    @property
+    def category(self) -> str:
+        return self._category
+
+    async def execute(self, params: dict[str, Any]) -> Any:
+        """Execute a query. Expects ``params['query']`` as the query string."""
+        from lmm.tools.base import ToolResult, ToolStatus
+
+        query_str = params.get("query", "")
+        if not query_str:
+            return ToolResult(
+                status=ToolStatus.ERROR,
+                error="Missing 'query' parameter",
+            )
+        try:
+            if hasattr(self._engine, "aquery"):
+                result = await self._engine.aquery(query_str)
+            else:
+                import asyncio
+                result = await asyncio.to_thread(
+                    self._engine.query, query_str,
+                )
+            return ToolResult(
+                status=ToolStatus.SUCCESS,
+                output=str(result),
+                relevance_score=0.5,
+            )
+        except Exception as exc:
+            return ToolResult(status=ToolStatus.ERROR, error=str(exc))
