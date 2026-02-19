@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass, field
 
@@ -11,6 +12,8 @@ from scipy import sparse
 from lmm.reasoning.alaya import AlayaMemory
 from lmm.reasoning.base import BaseReasoner, ReasonerResult, compute_complexity
 from lmm.reasoning.recovery import CircuitBreaker
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -85,7 +88,9 @@ class DharmaReasonerOrchestrator:
                 return mode
 
         # All circuits open — force first reasoner (will reset on success)
-        return next(iter(self._reasoners))
+        fallback = next(iter(self._reasoners))
+        logger.debug("All circuit breakers open, forcing %s", fallback)
+        return fallback
 
     def reason(
         self,
@@ -269,7 +274,14 @@ class DharmaReasonerOrchestrator:
         if result is None:
             # Phase 1 timed out — direct call as last resort
             fallback = next(iter(self._reasoners))
-            result = self._reasoners[fallback].reason(h, J, sila_gamma=sila_gamma)
+            logger.debug("Phase 1 timeout, falling back to %s", fallback)
+            try:
+                result = self._reasoners[fallback].reason(
+                    h, J, sila_gamma=sila_gamma,
+                )
+            except Exception:
+                logger.debug("Fallback reasoner also failed", exc_info=True)
+                raise RuntimeError("All reasoning phases failed")
             mode = fallback
         power_history = list(result.power_history) if result.power_history else []
         final_P_err = power_history[-1] if power_history else float("inf")

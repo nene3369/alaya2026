@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 import struct
 import time
@@ -22,6 +23,8 @@ from scipy import sparse
 
 from lmm.dharma.fep import solve_fep_kcl_analog
 from lmm.reasoning.recovery import AgentWatchdog
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -78,10 +81,14 @@ class HeartbeatDaemon:
         idle_sleep_threshold: float = 60.0,
         deterministic: bool = False,
     ):
+        if n_dims < 1:
+            raise ValueError(f"n_dims must be >= 1, got {n_dims}")
         if n_dims > 1024:
             raise ValueError(
                 f"n_dims={n_dims} exceeds maximum 1024 for heartbeat daemon"
             )
+        if dt <= 0:
+            raise ValueError(f"dt must be positive, got {dt}")
         self.n_dims = n_dims
         self.dt_base = dt
         self._dt = dt
@@ -102,7 +109,7 @@ class HeartbeatDaemon:
         self._last_sleep_report: dict | None = None
 
         # Control
-        self._stop_event = False
+        self._stop_event = asyncio.Event()
         self._lock = asyncio.Lock()
 
         # Sleep integration (set externally via attach_sleep)
@@ -246,7 +253,7 @@ class HeartbeatDaemon:
 
     async def run(self) -> None:
         """Main heartbeat loop. Launch via asyncio.create_task(daemon.run())."""
-        while not self._stop_event:
+        while not self._stop_event.is_set():
             try:
                 telemetry = await self.tick()
                 self._watchdog.record_tick(energy=telemetry.cv)
@@ -261,8 +268,7 @@ class HeartbeatDaemon:
             except asyncio.CancelledError:
                 break
             except Exception:
-                # Prevent silent daemon death on unexpected errors
-                pass
+                logger.debug("heartbeat tick error", exc_info=True)
             if self.deterministic:
                 break
             await asyncio.sleep(self._dt)
@@ -301,7 +307,7 @@ class HeartbeatDaemon:
 
     def stop(self) -> None:
         """Signal the heartbeat loop to stop."""
-        self._stop_event = True
+        self._stop_event.set()
 
     @property
     def state(self) -> np.ndarray:

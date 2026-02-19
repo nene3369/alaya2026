@@ -5,7 +5,14 @@ Surprise = -log P(x): lower prior probability → higher surprise.
 
 from __future__ import annotations
 
+import warnings
+from typing import Literal
+
 import numpy as np
+
+from lmm._validation import validate_array_finite
+
+SurpriseMethod = Literal["kl", "entropy", "bayesian"]
 
 
 class SurpriseCalculator:
@@ -14,13 +21,20 @@ class SurpriseCalculator:
     Methods: "kl", "entropy" (both use -log P(x)), "bayesian" (KL posterior||prior).
     """
 
-    def __init__(self, method: str = "kl"):
-        self.method = method
+    def __init__(self, method: SurpriseMethod = "kl"):
+        method_clean = method.strip().lower()
+        if method_clean != method:
+            warnings.warn(
+                f"surprise method {method!r} was normalized to {method_clean!r}",
+                stacklevel=2,
+            )
+        self.method = method_clean
         self._prior: np.ndarray | None = None
         self._bin_edges: np.ndarray | None = None
 
     def fit(self, data: np.ndarray) -> SurpriseCalculator:
         """Learn prior distribution from reference data."""
+        validate_array_finite(data, "reference data")
         self._prior, self._bin_edges = self._estimate_distribution(data)
         return self
 
@@ -28,6 +42,7 @@ class SurpriseCalculator:
         """Compute surprise for each observation."""
         if len(observations) == 0:
             return np.array([])
+        validate_array_finite(observations, "observations")
         if self.method in ("kl", "entropy"):
             return self._surprise_from_prior(observations)
         if self.method == "bayesian":

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
 from lmm.qubo import QUBOBuilder
 from lmm.solvers import ClassicalQUBOSolver
 from lmm.surprise import SurpriseCalculator
+
+SurpriseMethod = Literal["kl", "entropy", "bayesian"]
 
 
 @dataclass
@@ -34,7 +37,7 @@ class SmartSelector:
         k: int = 10,
         alpha: float = 1.0,
         gamma: float = 10.0,
-        surprise_method: str = "entropy",
+        surprise_method: SurpriseMethod = "entropy",
     ):
         self.k = k
         self.alpha = alpha

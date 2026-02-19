@@ -301,3 +301,7 @@ class AgentWatchdog:
     @property
     def recovery_count(self) -> int:
         return self._recovery_count
+
+    def reset_recovery_count(self) -> None:
+        """Reset the recovery counter (e.g. after sustained healthy operation)."""
+        self._recovery_count = 0

@@ -60,19 +60,32 @@ class QUBOBuilder:
         self, surprises: np.ndarray, alpha: float = 1.0,
     ) -> None:
         """Minimise -alpha * sum(s_i * x_i) to select high-surprise items."""
-        self._diag -= alpha * np.asarray(surprises, dtype=np.float64)
+        surprises = np.asarray(surprises, dtype=np.float64)
+        if len(surprises) != self.n:
+            raise ValueError(
+                f"surprises length {len(surprises)} != n_variables {self.n}"
+            )
+        self._diag -= alpha * surprises
+        self._invalidate_cache()  # defensive: future-proof against refactors
 
     def add_cardinality_constraint(self, k: int, gamma: float = 10.0) -> None:
         """Add penalty gamma * (sum(x_i) - k)^2 implicitly in O(n)."""
+        if k < 0 or k > self.n:
+            raise ValueError(f"k={k} out of range [0, {self.n}]")
         self._diag += gamma * (1.0 - 2.0 * k)
         self._cardinality_gamma += gamma
         self._cardinality_k = k
+        self._invalidate_cache()  # defensive: future-proof against refactors
 
     def add_diversity_penalty(
         self, similarity_matrix: np.ndarray, beta: float = 1.0,
     ) -> None:
         """Add beta * sum_ij sim(i,j) * x_i * x_j for diversity."""
         sim = np.array(similarity_matrix)
+        if sim.shape != (self.n, self.n):
+            raise ValueError(
+                f"similarity_matrix shape {sim.shape} != ({self.n}, {self.n})"
+            )
         np.fill_diagonal(sim, 0.0)
         mask = np.abs(sim) > 1e-15
         rows, cols = np.where(mask)

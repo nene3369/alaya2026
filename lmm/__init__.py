@@ -17,7 +17,7 @@ del _inject_vendor
 
 __version__ = "1.0.0"
 
-from lmm.core import LMM, LMMResult
+from lmm.core import LMM, LMMResult, SolverMethod, SurpriseMethod
 from lmm.dharma.api import DharmaLMM
 from lmm.llm.drift import DriftDetector
 from lmm.llm.fewshot import FewShotSelector
@@ -32,6 +32,8 @@ from lmm.surprise import SurpriseCalculator
 __all__ = [
     "LMM",
     "LMMResult",
+    "SurpriseMethod",
+    "SolverMethod",
     "QUBOBuilder",
     "ClassicalQUBOSolver",
     "solve_classical",
