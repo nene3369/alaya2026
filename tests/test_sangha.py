@@ -234,8 +234,10 @@ class TestSanghaOrchestrator:
 
 from lmm.dharma.sangha import (
     DiscipleAgent,
+    Sariputra,
     Upali,
     Maudgalyayana,
+    Mahakasyapa,
 )
 from lmm.reasoning.pineal import PinealGland
 
@@ -330,5 +332,122 @@ class TestPinealIntegration:
         """松果体統合後もUpaliの拒否が機能すること."""
         orch = SanghaOrchestrator()
         ctx = {"query": "please run rm -rf /data", "issue_id": "x"}
+        result = orch.hold_council_sync(ctx)
+        assert result.final == "REJECTED"
+
+
+# ---------------------------------------------------------------------------
+# AlayaMemory RAG Integration (阿頼耶識RAG統合テスト)
+# ---------------------------------------------------------------------------
+
+class _MockAlaya:
+    """search(query, limit) を提供するモックオブジェクト."""
+
+    def __init__(self, results=None):
+        self.results = results or []
+        self.calls = []
+
+    def search(self, query, limit=5):
+        self.calls.append((query, limit))
+        return self.results
+
+
+class _BrokenAlaya:
+    """search() が常に例外を投げるモック."""
+
+    def search(self, query, limit=5):
+        raise ConnectionError("Vector DB down")
+
+
+class TestAlayaMemoryRAG:
+    """AlayaMemory RAG 統合テスト群 — Sariputra・Mahakasyapa × 阿頼耶識."""
+
+    def test_sariputra_with_alaya_includes_facts(self):
+        """阿頼耶識付きSariputraがRAG結果をinsightに含めること."""
+        mock = _MockAlaya(["fact_about_qubo", "fact_about_solver"])
+        patthana = PatthanaEngine()
+        node = Sariputra(patthana, alaya=mock, pineal=None)
+        ctx = {"query": "optimise QUBO", "issue_id": "x"}
+        result = asyncio.run(node.contemplate(ctx))
+        assert "阿頼耶識参照" in result["insight"]
+        assert "fact_about_qubo" in result["insight"]
+        assert len(mock.calls) == 1
+        assert mock.calls[0][1] == 2  # limit=2
+
+    def test_sariputra_without_alaya_unchanged(self):
+        """阿頼耶識なしのSariputraは従来通り動作すること."""
+        patthana = PatthanaEngine()
+        node = Sariputra(patthana, pineal=None)
+        ctx = {"query": "test", "issue_id": "x"}
+        result = asyncio.run(node.contemplate(ctx))
+        assert "阿頼耶識参照" not in result["insight"]
+        assert "Root causes" in result["insight"]
+
+    def test_sariputra_alaya_exception_handled(self):
+        """阿頼耶識のsearch()が例外を投げても正常に結果を返すこと."""
+        patthana = PatthanaEngine()
+        node = Sariputra(patthana, alaya=_BrokenAlaya(), pineal=None)
+        ctx = {"query": "test", "issue_id": "x"}
+        result = asyncio.run(node.contemplate(ctx))
+        assert result["verdict"] == "PROCEED"
+        assert "Root causes" in result["insight"]
+
+    def test_mahakasyapa_with_alaya_retrieves_karma(self):
+        """阿頼耶識付きMahakasyapaが過去の業を取得すること."""
+        mock = _MockAlaya(["past_error_pattern", "past_success", "past_failure"])
+        node = Mahakasyapa(alaya=mock, pineal=None)
+        ctx = {"query": "fix the regression"}
+        result = asyncio.run(node.contemplate(ctx))
+        assert "阿頼耶識より" in result["insight"]
+        assert "3 件" in result["insight"]
+        assert len(mock.calls) == 1
+        assert mock.calls[0][1] == 3  # limit=3
+
+    def test_mahakasyapa_without_alaya_new_event(self):
+        """阿頼耶識なしのMahakasyapaは新しい事象として報告すること."""
+        node = Mahakasyapa(pineal=None)
+        ctx = {"query": "test"}
+        result = asyncio.run(node.contemplate(ctx))
+        assert "全く新しい事象" in result["insight"]
+
+    def test_mahakasyapa_alaya_exception_handled(self):
+        """Mahakasyapaの阿頼耶識が例外を投げても正常に動作すること."""
+        node = Mahakasyapa(alaya=_BrokenAlaya(), pineal=None)
+        ctx = {"query": "test"}
+        result = asyncio.run(node.contemplate(ctx))
+        assert result["verdict"] == "APPROVE"
+        assert "失敗" in result["insight"]
+
+    def test_orchestrator_passes_alaya_to_disciples(self):
+        """SanghaOrchestratorが阿頼耶識をSariputraとMahakasyapaに注入すること."""
+        mock = _MockAlaya(["test_hit"])
+        orch = SanghaOrchestrator(alaya_memory=mock)
+        sariputra = next(d for d in orch.disciples if d.name == "Sariputra")
+        mahakasyapa = next(d for d in orch.disciples if d.name == "Mahakasyapa")
+        assert sariputra.alaya is mock
+        assert mahakasyapa.alaya is mock
+
+    def test_orchestrator_without_alaya_backward_compat(self):
+        """alaya_memory未指定時は従来通りNoneであること."""
+        orch = SanghaOrchestrator()
+        sariputra = next(d for d in orch.disciples if d.name == "Sariputra")
+        mahakasyapa = next(d for d in orch.disciples if d.name == "Mahakasyapa")
+        assert sariputra.alaya is None
+        assert mahakasyapa.alaya is None
+
+    def test_full_council_with_alaya_approved(self):
+        """阿頼耶識統合後も全弟子による合議でAPPROVEDが出ること."""
+        mock = _MockAlaya(["retrieved_context"])
+        orch = SanghaOrchestrator(alaya_memory=mock)
+        ctx = {"query": "optimise algorithm", "issue_id": "test_1"}
+        result = orch.hold_council_sync(ctx)
+        assert result.final == "APPROVED"
+        assert len(result.logs) == 7
+
+    def test_full_council_with_alaya_rejection(self):
+        """阿頼耶識統合後もUpaliの拒否が機能すること."""
+        mock = _MockAlaya(["some_context"])
+        orch = SanghaOrchestrator(alaya_memory=mock)
+        ctx = {"query": "drop table users", "issue_id": "x"}
         result = orch.hold_council_sync(ctx)
         assert result.final == "REJECTED"
