@@ -11,6 +11,7 @@ End-to-end pipeline combining:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from scipy import sparse
@@ -87,6 +88,7 @@ class DharmaLMM:
         sa_temp_start: float = 10.0,
         sa_temp_end: float = 0.01,
         use_sangha: bool = True,
+        alaya_memory: Any = None,
     ):
         self.k = k
         self.weights = DharmaWeights(alpha=alpha, beta=beta, gamma=gamma)
@@ -106,7 +108,7 @@ class DharmaLMM:
         self._balancer = MadhyamakaBalancer()
         self._interpreter = DharmaInterpreter()
         self._submodular = SubmodularSelector(alpha=alpha, beta=beta)
-        self._sangha = SanghaOrchestrator() if use_sangha else None
+        self._sangha = SanghaOrchestrator(alaya_memory=alaya_memory) if use_sangha else None
 
     def fit(self, reference_data: np.ndarray) -> DharmaLMM:
         """Learn reference distribution (prior)."""

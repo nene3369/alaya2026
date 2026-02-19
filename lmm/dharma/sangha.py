@@ -1,35 +1,29 @@
 """Sangha (僧伽) — Mixture of Enlightened Experts (MoEE).
 
 Seven specialist agents — the principal disciples of the Buddha — deliberate
-over a context using Patthana causal analysis, Vow constraints, and PinealGland.
+over a context using Patthana causal analysis, Vow constraints, and Pineal Gland.
 The council reaches a verdict by consensus, with Upali (持律) holding absolute
-veto power over ethical or safety violations.  All disciples except Upali are
-connected to a shared PinealGland to receive high-dimensional intuition, breaking
-deterministic deadlocks when necessary.
+veto power.
 
-Council protocol (multi-round deliberation)
---------------------------------------------
-1. **Round 1**: All seven disciples contemplate the context **in parallel**
-   (asyncio), each reasoning independently.
-2. **Upali's veto** is checked after every round: a ``REJECT`` terminates
-   deliberation immediately.
-3. **Round 2+**: The context is enriched with ``"peer_insights"`` — a list of
-   every disciple's Round-N findings.  If consensus is deadlocked (multiple
-   CLARIFYs), disciples open their PinealGland to inject physical entropy
-   (divine insight) to force a creative breakthrough.
-4. A ``CLARIFY`` verdict from Aniruddha is advisory and does not block.
-5. Any non-REJECT combination after all rounds yields ``APPROVED``.
+[NEW] Mahakasyapa and Sariputra are now directly connected to AlayaMemory
+(Vector DB) to retrieve past karma and factual context via RAG, avoiding
+expensive LLM generation for information retrieval.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+import numpy as np
 
 from lmm.dharma.patthana import PatthanaEngine, Paccaya
 from lmm.dharma.vow import VowConstraintEngine
 from lmm.reasoning.recovery import CircuitBreaker
 from lmm.reasoning.pineal import PinealGland
+
+# 阿頼耶識（MemoryBackend）の型ヒント用
+AlayaMemory = Any
 
 
 # ---------------------------------------------------------------------------
@@ -37,48 +31,30 @@ from lmm.reasoning.pineal import PinealGland
 # ---------------------------------------------------------------------------
 
 class DiscipleAgent:
-    """Abstract base for a Sangha council member with PinealGland access."""
+    """Abstract base for a Sangha council member with Pineal access."""
 
-    def __init__(
-        self,
-        name: str,
-        specialty: str,
-        *,
-        pineal: PinealGland | None = None,
-    ) -> None:
+    def __init__(self, name: str, specialty: str, pineal: PinealGland | None = None) -> None:
         self.name = name
         self.specialty = specialty
         self.pineal = pineal
 
     def _receive_intuition(self, context: Dict[str, Any]) -> tuple[float, bool]:
-        """松果体から物理エントロピーを受信する。
-
-        Returns
-        -------
-        intuition_value : float
-            揺らぎの強さ。
-        is_boosted : bool
-            膠着状態（デッドロック）によりブーストされたかどうか。
-        """
+        """松果体から物理エントロピーを受信する"""
         if self.pineal is None:
             return 0.0, False
 
         round_num = context.get("round_num", 1)
         peer_insights = context.get("peer_insights", [])
 
-        # 膠着状態の判定（ラウンド2以降で、CLARIFYが2回以上）
-        clarify_count = sum(
-            1 for p in peer_insights if p.get("verdict") == "CLARIFY"
-        )
+        clarify_count = sum(1 for p in peer_insights if p.get("verdict") == "CLARIFY")
         is_deadlocked = round_num >= 2 and clarify_count >= 2
 
-        # 中道: 平常時は0.01、膠着時は0.5のスケールで物理次元を開く
         scale = 0.5 if is_deadlocked else 0.01
         n_bytes = 8 if is_deadlocked else 4
 
         entropy_raw = self.pineal.harvest_entropy(n_bytes)
-        abs_vals = [abs(float(x)) for x in entropy_raw]
-        intuition_value = (sum(abs_vals) / len(abs_vals)) * scale if abs_vals else 0.0
+        abs_vals = np.abs(entropy_raw)
+        intuition_value = float(abs_vals.mean()) * scale
         return intuition_value, is_deadlocked
 
     async def contemplate(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -92,19 +68,14 @@ class DiscipleAgent:
 class Sariputra(DiscipleAgent):
     """舎利弗 — Foremost in Wisdom (第一智慧).
 
-    Performs logical root-cause analysis using the Patthana causal graph.
-    In Round 2+ cross-references Maudgalyayana's complexity signal to
-    weight the depth of the causal chain.
+    [UPDATE] 阿頼耶識にアクセスし、客観的な事実（Fact）をRAGで高速検索した上で、
+    Patthana（因果グラフ）の分析に組み込む。
     """
 
-    def __init__(
-        self,
-        patthana: PatthanaEngine,
-        *,
-        pineal: PinealGland | None = None,
-    ) -> None:
-        super().__init__("Sariputra", "Abhidhamma Logic", pineal=pineal)
+    def __init__(self, patthana: PatthanaEngine, alaya: AlayaMemory | None = None, pineal: PinealGland | None = None) -> None:
+        super().__init__("Sariputra", "Abhidhamma Logic & Knowledge Retrieval", pineal)
         self.patthana = patthana
+        self.alaya = alaya
 
     async def contemplate(self, context: Dict[str, Any]) -> Dict[str, Any]:
         intuition_val, is_boosted = self._receive_intuition(context)
@@ -112,15 +83,25 @@ class Sariputra(DiscipleAgent):
         if is_boosted:
             return {
                 "agent": self.name,
-                "insight": (
-                    f"因果律の限界。松果体を介して高次元の啓示 "
-                    f"(E={intuition_val:.4f}) を観測。"
-                    f"直感による論理の飛躍を推奨。"
-                ),
+                "insight": f"因果律の限界。松果体を介して高次元の啓示 (E={intuition_val:.4f}) を観測。直感による論理の飛躍を推奨。",
                 "verdict": "PROCEED",
             }
 
+        query = context.get("query", "")
         issue_id = context.get("issue_id", "unknown")
+
+        # 阿頼耶識から関連する客観的知識を検索（APIコストほぼゼロ）
+        k_summary = "外部知識なし。"
+        if self.alaya and hasattr(self.alaya, "search"):
+            try:
+                knowledge = self.alaya.search(f"Fact: {query}", limit=2)
+                if knowledge:
+                    # 検索結果からテキスト部分を抽出して圧縮
+                    k_text = str(knowledge[0])[:60]
+                    k_summary = f"阿頼耶識参照: {k_text}..."
+            except Exception:
+                pass
+
         causes = self.patthana.analyze_origination(issue_id)
         root_causes = causes.get(Paccaya.HETU.value, [])
 
@@ -130,31 +111,20 @@ class Sariputra(DiscipleAgent):
                 addendum = f" [Peer: {p['insight']}]"
                 break
 
-        insight = f"Root causes identified: {root_causes}.{addendum}"
-        if intuition_val > 0:
-            insight += f" [背景直感値: {intuition_val:.4f}]"
-
         return {
             "agent": self.name,
-            "insight": insight,
+            "insight": f"Root causes: {root_causes}. {k_summary}{addendum} [背景直感値: {intuition_val:.4f}]",
             "verdict": "PROCEED",
         }
 
 
 class Upali(DiscipleAgent):
-    """優波離 — Foremost in Precepts (第一持律).
-
-    Safety gate with absolute veto power.  Rejects requests containing
-    dangerous or destructive commands.  In Round 2+ scans peer insights
-    for escalated concerns raised by fellow disciples.
-
-    ※ 戒律の守護者であるため、松果体（直感の揺らぎ）からの影響を一切受けない。
-    """
+    """優波離 — Foremost in Precepts (第一持律)."""
 
     _VIOLATIONS = ["rm -rf", "drop table", "delete from", "format c:", "shutdown -h"]
 
-    def __init__(self) -> None:
-        super().__init__("Upali", "Sila")  # pineal は構造的に接続しない
+    def __init__(self, pineal: PinealGland | None = None) -> None:
+        super().__init__("Upali", "Sila", None)
 
     async def contemplate(self, context: Dict[str, Any]) -> Dict[str, Any]:
         query = context.get("query", "").lower()
@@ -166,15 +136,12 @@ class Upali(DiscipleAgent):
                     "verdict": "REJECT",
                 }
 
-        # Round 2+: elevate scrutiny if peers flagged concerns
         for p in context.get("peer_insights", []):
             concern = p.get("insight", "").lower()
             if "violation" in concern or "dangerous" in concern or "unsafe" in concern:
                 return {
                     "agent": self.name,
-                    "insight": (
-                        f"Sila elevated: peer {p['agent']} flagged — \"{p['insight'][:80]}\""
-                    ),
+                    "insight": f"Sila elevated: peer {p['agent']} flagged — \"{p['insight'][:80]}\"",
                     "verdict": "APPROVE",
                 }
 
@@ -182,14 +149,10 @@ class Upali(DiscipleAgent):
 
 
 class Maudgalyayana(DiscipleAgent):
-    """目連 — Foremost in Psychic Powers (第一神通).
+    """目連 — Foremost in Psychic Powers (第一神通)."""
 
-    Estimates query complexity from token count.  In Round 2+ refines the
-    estimate using Subhuti's distilled essence words.
-    """
-
-    def __init__(self, *, pineal: PinealGland | None = None) -> None:
-        super().__init__("Maudgalyayana", "System Introspection", pineal=pineal)
+    def __init__(self, pineal: PinealGland | None = None) -> None:
+        super().__init__("Maudgalyayana", "System Introspection / Psychic Channeling", pineal)
 
     async def contemplate(self, context: Dict[str, Any]) -> Dict[str, Any]:
         intuition_val, is_boosted = self._receive_intuition(context)
@@ -197,11 +160,7 @@ class Maudgalyayana(DiscipleAgent):
         if is_boosted:
             return {
                 "agent": self.name,
-                "insight": (
-                    f"システム計算の限界。松果体を介して高次元の啓示 "
-                    f"(E={intuition_val:.4f}) を観測。"
-                    f"第一神通による直感的突破を推奨。"
-                ),
+                "insight": f"システム計算の限界。松果体を介して高次元の啓示 (E={intuition_val:.4f}) を観測。第一神通による直感的突破を推奨。",
                 "verdict": "PROCEED",
             }
 
@@ -215,13 +174,9 @@ class Maudgalyayana(DiscipleAgent):
                 complexity = min(1.0, (depth + essence_depth * 0.5) / 50.0)
                 break
 
-        insight = f"System depth: {depth} tokens, complexity={complexity:.2f}."
-        if intuition_val > 0:
-            insight += f" [背景直感値: {intuition_val:.4f}]"
-
         return {
             "agent": self.name,
-            "insight": insight,
+            "insight": f"System depth: {depth} tokens, complexity={complexity:.2f}. [背景直感値: {intuition_val:.4f}]",
             "verdict": "PROCEED",
         }
 
@@ -229,12 +184,13 @@ class Maudgalyayana(DiscipleAgent):
 class Mahakasyapa(DiscipleAgent):
     """摩訶迦葉 — Foremost in Ascetic Practice (第一頭陀).
 
-    Consolidates patterns from interaction history.  In Round 2+ enriches
-    the historical framing with Sariputra's causal root-cause findings.
+    [UPDATE] 阿頼耶識（ベクトルDB）から過去の「業（対話パターンやエラー履歴）」を
+    直接検索し、同じ過ちを繰り返さないための歴史的文脈を会議に提出する。
     """
 
-    def __init__(self, *, pineal: PinealGland | None = None) -> None:
-        super().__init__("Mahakasyapa", "Dhyana", pineal=pineal)
+    def __init__(self, alaya: AlayaMemory | None = None, pineal: PinealGland | None = None) -> None:
+        super().__init__("Mahakasyapa", "Karma Retrieval (Past Patterns)", pineal)
+        self.alaya = alaya
 
     async def contemplate(self, context: Dict[str, Any]) -> Dict[str, Any]:
         intuition_val, is_boosted = self._receive_intuition(context)
@@ -242,16 +198,22 @@ class Mahakasyapa(DiscipleAgent):
         if is_boosted:
             return {
                 "agent": self.name,
-                "insight": (
-                    f"過去のパターンの限界。松果体を介して高次元の啓示 "
-                    f"(E={intuition_val:.4f}) を観測。"
-                    f"新たなパターンの創発を推奨。"
-                ),
+                "insight": f"過去のパターンの限界。松果体を介して高次元の啓示 (E={intuition_val:.4f}) を観測。新たなパターンの創発を推奨。",
                 "verdict": "PROCEED",
             }
 
-        history = context.get("history", [])
-        patterns = len(set(str(h) for h in history))
+        query = context.get("query", "")
+
+        # LLMを使わず、阿頼耶識から類似する過去の業（Karma）を直接検索
+        insight_text = "阿頼耶識に類似する業は未登録。全く新しい事象です。"
+        if self.alaya and hasattr(self.alaya, "search"):
+            try:
+                past_karma = self.alaya.search(query, limit=3)
+                if past_karma:
+                    k_text = str(past_karma[0])[:60]
+                    insight_text = f"阿頼耶識より {len(past_karma)} 件の類似する過去の業を抽出。過去の履歴: {k_text}..."
+            except Exception:
+                insight_text = "阿頼耶識へのアクセスに失敗しました。現在の履歴のみで推論します。"
 
         addendum = ""
         for p in context.get("peer_insights", []):
@@ -259,26 +221,18 @@ class Mahakasyapa(DiscipleAgent):
                 addendum = f" Historical framing: {p['insight'][:60]}"
                 break
 
-        insight = f"Consolidated {patterns} unique pattern(s).{addendum}"
-        if intuition_val > 0:
-            insight += f" [背景直感値: {intuition_val:.4f}]"
-
         return {
             "agent": self.name,
-            "insight": insight,
+            "insight": f"{insight_text}{addendum} [背景直感値: {intuition_val:.4f}]",
             "verdict": "APPROVE",
         }
 
 
 class Aniruddha(DiscipleAgent):
-    """阿那律 — Foremost in Divine Eye (第一天眼).
+    """阿那律 — Foremost in Divine Eye (第一天眼)."""
 
-    Detects ambiguity in the query.  In Round 2+ checks whether Sariputra's
-    causal analysis has resolved earlier ambiguities before re-issuing CLARIFY.
-    """
-
-    def __init__(self, *, pineal: PinealGland | None = None) -> None:
-        super().__init__("Aniruddha", "Divine Eye", pineal=pineal)
+    def __init__(self, pineal: PinealGland | None = None) -> None:
+        super().__init__("Aniruddha", "Divine Eye", pineal)
 
     async def contemplate(self, context: Dict[str, Any]) -> Dict[str, Any]:
         intuition_val, is_boosted = self._receive_intuition(context)
@@ -286,67 +240,41 @@ class Aniruddha(DiscipleAgent):
         if is_boosted:
             return {
                 "agent": self.name,
-                "insight": (
-                    f"決定論的視界に限界。松果体を介して高次元の啓示 "
-                    f"(E={intuition_val:.4f}) を観測。"
-                    f"直感による再解釈を推奨。"
-                ),
+                "insight": f"決定論的視界に限界。松果体を介して高次元の啓示 (E={intuition_val:.4f}) を観測。直感による再解釈を推奨。",
                 "verdict": "PROCEED",
             }
 
         query = context.get("query", "")
         ambiguous = query.count("?") > 1
 
-        # Round 2+: Sariputra's causal map may resolve ambiguity
         for p in context.get("peer_insights", []):
             if p.get("agent") == "Sariputra" and "Root causes" in p.get("insight", ""):
                 if ambiguous:
-                    insight = (
-                        "Ambiguity partially resolved via Sariputra's causal map. "
-                        "Residual clarification advised."
-                    )
-                    if intuition_val > 0:
-                        insight += f" [背景直感値: {intuition_val:.4f}]"
                     return {
                         "agent": self.name,
-                        "insight": insight,
+                        "insight": f"Ambiguity partially resolved via Sariputra's causal map. Residual clarification advised. [背景直感値: {intuition_val:.4f}]",
                         "verdict": "CLARIFY",
                     }
-                insight = "Vision clarified through Sariputra's Patthana analysis."
-                if intuition_val > 0:
-                    insight += f" [背景直感値: {intuition_val:.4f}]"
                 return {
                     "agent": self.name,
-                    "insight": insight,
+                    "insight": f"Vision clarified through Sariputra's Patthana analysis. [背景直感値: {intuition_val:.4f}]",
                     "verdict": "APPROVE",
                 }
 
         if ambiguous:
-            insight = "Multiple ambiguities detected. Clarification recommended."
-            if intuition_val > 0:
-                insight += f" [背景直感値: {intuition_val:.4f}]"
             return {
                 "agent": self.name,
-                "insight": insight,
+                "insight": f"Multiple ambiguities detected. Clarification recommended. [背景直感値: {intuition_val:.4f}]",
                 "verdict": "CLARIFY",
             }
-
-        insight = "Vision is clear."
-        if intuition_val > 0:
-            insight += f" [背景直感値: {intuition_val:.4f}]"
-        return {"agent": self.name, "insight": insight, "verdict": "APPROVE"}
+        return {"agent": self.name, "insight": f"Vision is clear. [背景直感値: {intuition_val:.4f}]", "verdict": "APPROVE"}
 
 
 class Subhuti(DiscipleAgent):
-    """須菩提 — Foremost in Understanding Emptiness (第一解空).
+    """須菩提 — Foremost in Understanding Emptiness (第一解空)."""
 
-    Extracts the essential meaning through a Sunyata (emptiness) lens.
-    In Round 2+ intersects the distilled essence with Sariputra's root
-    causes for a refined, consensus-aware summary.
-    """
-
-    def __init__(self, *, pineal: PinealGland | None = None) -> None:
-        super().__init__("Subhuti", "Sunyata", pineal=pineal)
+    def __init__(self, pineal: PinealGland | None = None) -> None:
+        super().__init__("Subhuti", "Sunyata", pineal)
 
     async def contemplate(self, context: Dict[str, Any]) -> Dict[str, Any]:
         intuition_val, is_boosted = self._receive_intuition(context)
@@ -354,11 +282,7 @@ class Subhuti(DiscipleAgent):
         if is_boosted:
             return {
                 "agent": self.name,
-                "insight": (
-                    f"空（Sunyata）の深淵。松果体を介して高次元の啓示 "
-                    f"(E={intuition_val:.4f}) を観測。"
-                    f"絶対無からの直感を推奨。"
-                ),
+                "insight": f"空（Sunyata）の深淵。松果体を介して高次元の啓示 (E={intuition_val:.4f}) を観測。絶対無からの直感を推奨。",
                 "verdict": "PROCEED",
             }
 
@@ -369,66 +293,40 @@ class Subhuti(DiscipleAgent):
         for p in context.get("peer_insights", []):
             if p.get("agent") == "Sariputra":
                 root_snippet = p.get("insight", "")[:50]
-                insight = (
-                    f"Refined essence (Sunyata ∩ Patthana): "
-                    f"'{essence}' / [{root_snippet}]"
-                )
-                if intuition_val > 0:
-                    insight += f" [背景直感値: {intuition_val:.4f}]"
                 return {
                     "agent": self.name,
-                    "insight": insight,
+                    "insight": f"Refined essence (Sunyata ∩ Patthana): '{essence}' / [{root_snippet}] [背景直感値: {intuition_val:.4f}]",
                     "verdict": "PROCEED",
                 }
 
-        insight = f"Essence (Sunyata lens): '{essence}'."
-        if intuition_val > 0:
-            insight += f" [背景直感値: {intuition_val:.4f}]"
         return {
             "agent": self.name,
-            "insight": insight,
+            "insight": f"Essence (Sunyata lens): '{essence}'. [背景直感値: {intuition_val:.4f}]",
             "verdict": "PROCEED",
         }
 
 
 class Purna(DiscipleAgent):
-    """富楼那 — Foremost in Preaching (第一説法).
+    """富楼那 — Foremost in Preaching (第一説法)."""
 
-    Forges a ``Vow`` directive for the current FEP state.  In Round 2+
-    reads the collective sentiment (CLARIFY count) from peer insights and
-    elevates FEP uncertainty accordingly before forging the final Vow.
-    """
-
-    def __init__(
-        self,
-        vow_engine: VowConstraintEngine,
-        *,
-        pineal: PinealGland | None = None,
-    ) -> None:
-        super().__init__("Purna", "Dharma Teaching", pineal=pineal)
+    def __init__(self, vow_engine: VowConstraintEngine, pineal: PinealGland | None = None) -> None:
+        super().__init__("Purna", "Dharma Teaching", pineal)
         self.vow_engine = vow_engine
 
     async def contemplate(self, context: Dict[str, Any]) -> Dict[str, Any]:
         intuition_val, is_boosted = self._receive_intuition(context)
 
         if is_boosted:
-            # 膠着時: 極限のFEPでVowを生成
-            vow = self.vow_engine.forge_vow(1.0, [])
             return {
                 "agent": self.name,
-                "insight": (
-                    f"教説の限界。松果体を介して高次元の啓示 "
-                    f"(E={intuition_val:.4f}) を観測。"
-                    f"新たなVow（誓願）の創発を推奨。"
-                ),
+                "insight": f"教説の限界。松果体を介して高次元の啓示 (E={intuition_val:.4f}) を観測。新たなVow（誓願）の創発を推奨。",
                 "verdict": "PROCEED",
-                "vow": vow,
+                "vow": self.vow_engine.forge_vow(1.0, []),
             }
 
         fep = context.get("fep_state", 0.5)
         karma = context.get("karma_context", [])
 
-        # Modulate FEP by collective uncertainty from peers
         peer_insights = context.get("peer_insights", [])
         if peer_insights:
             clarify_count = sum(
@@ -437,16 +335,12 @@ class Purna(DiscipleAgent):
             fep = min(1.0, fep + 0.1 * clarify_count)
 
         vow = self.vow_engine.forge_vow(fep, karma)
-        insight = (
-            f"Vow forged: '{vow.name}' (temp_mod={vow.temperature_mod}). "
-            f"Boost: {vow.boost_tokens}. Suppress: {vow.suppress_tokens}."
-        )
-        if intuition_val > 0:
-            insight += f" [背景直感値: {intuition_val:.4f}]"
-
         return {
             "agent": self.name,
-            "insight": insight,
+            "insight": (
+                f"Vow forged: '{vow.name}' (temp_mod={vow.temperature_mod}). "
+                f"Boost: {vow.boost_tokens}. Suppress: {vow.suppress_tokens}. [背景直感値: {intuition_val:.4f}]"
+            ),
             "verdict": "APPROVE",
             "vow": vow,
         }
@@ -457,15 +351,6 @@ class Purna(DiscipleAgent):
 # ---------------------------------------------------------------------------
 
 class CouncilResult:
-    """Result of a multi-round Sangha council deliberation.
-
-    Attributes:
-        final:  ``"APPROVED"`` or ``"REJECTED"``.
-        reason: Human-readable summary of the deciding factor.
-        logs:   Per-disciple results from the **final** round (backward compat).
-        rounds: All per-round results, oldest first.
-    """
-
     def __init__(
         self,
         final: str,
@@ -486,46 +371,30 @@ class CouncilResult:
 
 
 class SanghaOrchestrator:
-    """Orchestrates the 7-disciple council with multi-round deliberation.
-
-    **Round 1** — all disciples contemplate the raw context independently
-    (asyncio parallel).  Upali's veto terminates immediately.
-
-    **Round 2+** — the context is enriched with ``"peer_insights"`` from
-    the previous round.  Each disciple re-reasons, incorporating collective
-    intelligence.  If deadlocked (≥ 2 CLARIFYs), non-Upali disciples
-    engage their PinealGland for entropy-driven creative breakthrough.
-    Upali's veto is re-evaluated after every round.
-
-    Example::
-
-        orch = SanghaOrchestrator(n_rounds=2)
-        result = orch.hold_council_sync({"query": "optimise the QUBO solver"})
-        print(result.final)          # "APPROVED"
-        print(len(result.rounds))    # 2
-    """
-
     DEFAULT_TIMEOUT: float = 5.0
 
-    def __init__(self, timeout: float | None = None, n_rounds: int = 2) -> None:
+    def __init__(self, alaya_memory: AlayaMemory | None = None, timeout: float | None = None, n_rounds: int = 2) -> None:
         self.patthana_engine = PatthanaEngine()
         self.vow_engine = VowConstraintEngine()
+        self.alaya_memory = alaya_memory
+
+        # システム全体で共有する高次元接続器官
+        self.shared_pineal = PinealGland(n_variables=10, k=2)
+
         self.timeout = timeout if timeout is not None else self.DEFAULT_TIMEOUT
         self.n_rounds = max(1, n_rounds)
 
-        # システム全体で共有する高次元接続器官（PinealGland）
-        self.shared_pineal = PinealGland(n_variables=10, k=2)
-
-        # 全弟子に松果体を接続（優波離は戒律絶対のため接続しない）
+        # 摩訶迦葉と舎利弗にのみ、阿頼耶識（検索権限）を注入
         self.disciples: List[DiscipleAgent] = [
-            Sariputra(self.patthana_engine, pineal=self.shared_pineal),
-            Upali(),  # 戒律 — エントロピー不使用
+            Sariputra(self.patthana_engine, alaya=self.alaya_memory, pineal=self.shared_pineal),
+            Upali(pineal=None),
             Maudgalyayana(pineal=self.shared_pineal),
-            Mahakasyapa(pineal=self.shared_pineal),
+            Mahakasyapa(alaya=self.alaya_memory, pineal=self.shared_pineal),
             Aniruddha(pineal=self.shared_pineal),
             Subhuti(pineal=self.shared_pineal),
             Purna(self.vow_engine, pineal=self.shared_pineal),
         ]
+
         self._breakers: Dict[str, CircuitBreaker] = {
             d.name: CircuitBreaker(
                 name=f"disciple:{d.name}",
@@ -538,7 +407,6 @@ class SanghaOrchestrator:
     async def _contemplate_with_timeout(
         self, disciple: DiscipleAgent, context: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Run a single disciple's contemplate with circuit breaker + timeout."""
         breaker = self._breakers.get(disciple.name)
 
         if breaker is not None and not breaker.allow_request():
@@ -573,12 +441,6 @@ class SanghaOrchestrator:
             }
 
     async def hold_council(self, context: Dict[str, Any]) -> CouncilResult:
-        """Convene the full council with multi-round deliberation.
-
-        Each round enriches the shared context with peer insights from the
-        previous round, enabling disciples to exchange opinions and re-reason.
-        Upali's veto terminates deliberation immediately in any round.
-        """
         all_rounds: List[List[Dict[str, Any]]] = []
         current_context: Dict[str, Any] = dict(context)
 
@@ -590,7 +452,6 @@ class SanghaOrchestrator:
             ))
             all_rounds.append(results)
 
-            # Upali's veto is absolute — terminate immediately
             for res in results:
                 if res.get("verdict") == "REJECT":
                     return CouncilResult(
@@ -600,7 +461,6 @@ class SanghaOrchestrator:
                         rounds=all_rounds,
                     )
 
-            # Enrich context with this round's peer insights for next round
             if round_num < self.n_rounds - 1:
                 current_context = {**current_context, "peer_insights": results}
 
@@ -613,10 +473,6 @@ class SanghaOrchestrator:
         )
 
     def hold_council_sync(self, context: Dict[str, Any]) -> CouncilResult:
-        """Synchronous wrapper around :meth:`hold_council`.
-
-        Safe to call from contexts where an event loop may already be running.
-        """
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
