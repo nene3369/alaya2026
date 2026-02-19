@@ -226,3 +226,114 @@ class TestSanghaOrchestrator:
         orch = SanghaOrchestrator()
         result = orch.hold_council_sync({"query": "test"})
         assert "APPROVED" in repr(result) or "REJECTED" in repr(result)
+
+
+# ---------------------------------------------------------------------------
+# PinealGland Integration (松果体統合テスト)
+# ---------------------------------------------------------------------------
+
+from lmm.dharma.sangha import (
+    DiscipleAgent,
+    Sariputra,
+    Upali,
+    Maudgalyayana,
+    Mahakasyapa,
+    Aniruddha,
+    Subhuti,
+    Purna,
+)
+from lmm.reasoning.pineal import PinealGland
+
+
+class TestPinealIntegration:
+    """Sangha × PinealGland 統合テスト群."""
+
+    def test_shared_pineal_created(self):
+        """SanghaOrchestrator が shared_pineal を生成すること."""
+        orch = SanghaOrchestrator()
+        assert hasattr(orch, "shared_pineal")
+        assert isinstance(orch.shared_pineal, PinealGland)
+
+    def test_pineal_attached_to_correct_disciples(self):
+        """Upali以外の全弟子に pineal が接続されていること."""
+        orch = SanghaOrchestrator()
+        for d in orch.disciples:
+            if d.name == "Upali":
+                assert d.pineal is None, "Upali は松果体を持たない"
+            else:
+                assert d.pineal is not None, f"{d.name} に松果体が未接続"
+
+    def test_all_non_upali_share_same_pineal(self):
+        """Upali以外が同一PinealGlandインスタンスを共有すること."""
+        orch = SanghaOrchestrator()
+        pineals = [d.pineal for d in orch.disciples if d.pineal is not None]
+        assert len(pineals) == 6
+        assert all(p is pineals[0] for p in pineals)
+
+    def test_receive_intuition_no_pineal(self):
+        """pineal=None の弟子は (0.0, False) を返すこと."""
+        agent = DiscipleAgent("test", "test", pineal=None)
+        val, boosted = agent._receive_intuition({"round_num": 1})
+        assert val == 0.0
+        assert boosted is False
+
+    def test_receive_intuition_normal_mode(self):
+        """通常モード（Round 1）では低振幅直感値を返すこと."""
+        pineal = PinealGland(n_variables=10, k=2)
+        agent = DiscipleAgent("test", "test", pineal=pineal)
+        val, boosted = agent._receive_intuition({"round_num": 1, "peer_insights": []})
+        assert boosted is False
+        # scale=0.01, mean(abs(entropy)) in [0, 1] => val in [0, 0.01]
+        assert 0.0 <= val <= 0.01
+
+    def test_receive_intuition_boosted_on_deadlock(self):
+        """膠着状態（round>=2, CLARIFY>=2）でブーストされること."""
+        pineal = PinealGland(n_variables=10, k=2)
+        agent = DiscipleAgent("test", "test", pineal=pineal)
+        deadlock_ctx = {
+            "round_num": 2,
+            "peer_insights": [
+                {"verdict": "CLARIFY", "agent": "A", "insight": "x"},
+                {"verdict": "CLARIFY", "agent": "B", "insight": "y"},
+                {"verdict": "APPROVE", "agent": "C", "insight": "z"},
+            ],
+        }
+        val, boosted = agent._receive_intuition(deadlock_ctx)
+        assert boosted is True
+        # scale=0.5, mean(abs(entropy)) in [0, 1] => val in [0, 0.5]
+        assert 0.0 <= val <= 0.5
+
+    def test_contemplate_appends_intuition_tag(self):
+        """通常時に背景直感値タグが insight に付加されること."""
+        pineal = PinealGland(n_variables=10, k=2)
+        node = Maudgalyayana(pineal=pineal)
+        ctx = {"query": "test query", "round_num": 1, "peer_insights": []}
+        result = asyncio.run(node.contemplate(ctx))
+        assert "背景直感値" in result["insight"]
+
+    def test_upali_no_entropy_in_contemplation(self):
+        """Upaliの出力にエントロピー関連の文言が含まれないこと."""
+        upali = Upali()
+        ctx = {"query": "safe query", "round_num": 2, "peer_insights": [
+            {"verdict": "CLARIFY", "agent": "A", "insight": "x"},
+            {"verdict": "CLARIFY", "agent": "B", "insight": "y"},
+        ]}
+        result = asyncio.run(upali.contemplate(ctx))
+        assert "松果体" not in result["insight"]
+        assert "背景直感値" not in result["insight"]
+        assert "E=" not in result["insight"]
+
+    def test_full_council_with_pineal_approved(self):
+        """松果体統合済みの全弟子による合議でAPPROVEDが出ること."""
+        orch = SanghaOrchestrator()
+        ctx = {"query": "optimise the inference pipeline", "issue_id": "issue_p1"}
+        result = orch.hold_council_sync(ctx)
+        assert result.final == "APPROVED"
+        assert len(result.logs) == 7
+
+    def test_rejection_still_works_with_pineal(self):
+        """松果体統合後もUpaliの拒否が機能すること."""
+        orch = SanghaOrchestrator()
+        ctx = {"query": "please run rm -rf /data", "issue_id": "x"}
+        result = orch.hold_council_sync(ctx)
+        assert result.final == "REJECTED"
