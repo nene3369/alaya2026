@@ -30,8 +30,13 @@ from lmm.dharma.energy import (
 )
 from lmm.dharma.engine import UniversalDharmaEngine
 from lmm.dharma.interpreter import DharmaInterpretation, DharmaInterpreter
+from lmm.dharma.sangha import CouncilResult, SanghaOrchestrator
 from lmm.solvers import ClassicalQUBOSolver, SubmodularSelector
 from lmm.surprise import SurpriseCalculator
+
+
+class SanghaRejectedError(RuntimeError):
+    """Raised when the Sangha council rejects a select_dharma request."""
 
 
 @dataclass
@@ -44,6 +49,7 @@ class DharmaResult:
     weights: DharmaWeights
     interpretation: DharmaInterpretation | None
     method: str
+    council: CouncilResult | None = None
 
 
 class DharmaLMM:
@@ -80,6 +86,7 @@ class DharmaLMM:
         sa_iterations: int = 5000,
         sa_temp_start: float = 10.0,
         sa_temp_end: float = 0.01,
+        use_sangha: bool = True,
     ):
         self.k = k
         self.weights = DharmaWeights(alpha=alpha, beta=beta, gamma=gamma)
@@ -99,6 +106,7 @@ class DharmaLMM:
         self._balancer = MadhyamakaBalancer()
         self._interpreter = DharmaInterpreter()
         self._submodular = SubmodularSelector(alpha=alpha, beta=beta)
+        self._sangha = SanghaOrchestrator() if use_sangha else None
 
     def fit(self, reference_data: np.ndarray) -> DharmaLMM:
         """Learn reference distribution (prior)."""
@@ -123,10 +131,24 @@ class DharmaLMM:
         candidates: np.ndarray,
         interpret: bool = True,
         extra_terms: list[DharmaEnergyTerm] | None = None,
+        query: str | None = None,
     ) -> DharmaResult:
         """Select K items from candidates using Dharma optimization."""
         n = len(candidates)
         k = min(self.k, n)
+
+        # ── Step 2: Sangha council (自動起動) ──────────────────────────────
+        council: CouncilResult | None = None
+        if self._sangha is not None:
+            _query = query or f"select_dharma: k={k} n={n} solver={self.solver_mode}"
+            council = self._sangha.hold_council_sync({
+                "query": _query,
+                "issue_id": f"dharma-{self.solver_mode}",
+                "fep_state": 0.5,
+            })
+            if council.final == "REJECTED":
+                raise SanghaRejectedError(council.reason)
+        # ──────────────────────────────────────────────────────────────────
 
         surprises = self._calculator.compute(candidates)
 
@@ -259,6 +281,7 @@ class DharmaLMM:
             weights=DharmaWeights(alpha=alpha, beta=beta, gamma=self.weights.gamma),
             interpretation=interpretation,
             method=method,
+            council=council,
         )
 
     def select_from_scores(

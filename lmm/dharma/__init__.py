@@ -1,6 +1,6 @@
 """Digital Dharma — Buddhist philosophy-inspired optimization engine."""
 
-from lmm.dharma.api import DharmaLMM
+from lmm.dharma.api import DharmaLMM, SanghaRejectedError
 from lmm.dharma.energy import DharmaEnergyTerm, DukkhaTerm, KarunaTerm
 from lmm.dharma.engine import EngineResult, UniversalDharmaEngine
 from lmm.dharma.patthana import Paccaya, PatthanaEngine
@@ -40,6 +40,7 @@ __all__ = [
     "VowConstraintEngine",
     "SanghaOrchestrator",
     "CouncilResult",
+    "SanghaRejectedError",
     # v6.0 — Dharma-Topology Protocol
     "DharmaTelemetry",
     "TopologyEvaluator",
