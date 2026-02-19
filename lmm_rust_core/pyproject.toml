@@ -1,0 +1,14 @@
+[build-system]
+requires      = ["maturin>=1.4,<2"]
+build-backend = "maturin"
+
+[project]
+name            = "lmm-rust-core"
+version         = "0.1.0"
+requires-python = ">=3.10"
+description     = "High-performance Rust kernels for LMM solvers (SA + FEP)"
+
+[tool.maturin]
+# Module name visible from Python: import lmm_rust_core
+module-name = "lmm_rust_core"
+features    = ["pyo3/extension-module"]
