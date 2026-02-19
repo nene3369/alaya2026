@@ -118,7 +118,7 @@ def run_hardware_benchmark():
         print(f"    J @ x:      {spmv_us:8.1f} us/call ({100*spmv_us/total_us:4.1f}%)")
         print(f"    elem-wise:  {ew_us:8.1f} us/call ({100*ew_us/total_us:4.1f}%)")
         print(f"    dot(e,e):   {dot_us:8.1f} us/call ({100*dot_us/total_us:4.1f}%)")
-        print(f"    ──────────────────────")
+        print("    ──────────────────────")
         print(f"    合計:       {total_us:8.1f} us/step")
         print(f"    300 step:   {total_us*300/1000:8.1f} ms")
 

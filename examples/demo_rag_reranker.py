@@ -212,7 +212,7 @@ def main():
     print()
     if c_metta > c_naive:
         print(f"  慈愛モード = +{c_metta - c_naive} クラスタの多様性改善!")
-        print(f"  「Lost in the Middle」問題を Metta (慈愛) で克服。")
+        print("  「Lost in the Middle」問題を Metta (慈愛) で克服。")
     print()
 
     print("  --- レイテンシ ---")

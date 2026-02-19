@@ -435,13 +435,13 @@ def main():
     print()
     print(f"    素朴 Top-K:        {q_naive.n_topics_covered} トピック, "
           f"冗長度 {q_naive.redundancy:.3f}")
-    print(f"      → 同じ内容の言い換えが詰まった「エコーチェンバー」")
-    print(f"      → LLM は狭い視野で堂々巡りの回答を生成")
+    print("      → 同じ内容の言い換えが詰まった「エコーチェンバー」")
+    print("      → LLM は狭い視野で堂々巡りの回答を生成")
     print()
     print(f"    IntentAwareRouter: {q_dharma.n_topics_covered} トピック, "
           f"冗長度 {q_dharma.redundancy:.3f}")
-    print(f"      → 多角的な知識ソースが立体的に配置された「サンガ」")
-    print(f"      → LLM は複数の視座から統合的な回答を生成")
+    print("      → 多角的な知識ソースが立体的に配置された「サンガ」")
+    print("      → LLM は複数の視座から統合的な回答を生成")
     print()
     print("  Garbage In, Garbage Out → Dharma In, Enlightenment Out")
     print()

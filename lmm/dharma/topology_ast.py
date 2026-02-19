@@ -18,7 +18,7 @@ import ast
 import collections
 import hashlib
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
