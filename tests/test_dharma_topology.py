@@ -18,6 +18,12 @@ from lmm.dharma.topology import (
     compute_karma_isolation,
     evaluate_engine_result,
 )
+from lmm.dharma.topology_ast import (
+    ChangeImpactAnalyzer,
+    ChangeImpactReport,
+    ModuleHealthReport,
+    compute_module_health,
+)
 
 
 # ===================================================================
@@ -618,3 +624,195 @@ class TestTopologyDriftDetector:
             assert "pillar" in j[0]
             assert "severity" in j[0]
             assert "message" in j[0]
+
+
+# ===================================================================
+# ChangeImpactAnalyzer
+# ===================================================================
+
+
+def _chain_graph(n: int = 5) -> tuple[sparse.csr_matrix, list[str]]:
+    """Build a linear import chain: A->B->C->D->E.
+
+    adj[i, i+1] = 1 means module i imports module i+1.
+    Changing E affects D, C, B, A transitively.
+    """
+    rows = list(range(n - 1))
+    cols = list(range(1, n))
+    vals = [1.0] * (n - 1)
+    adj = sparse.csr_matrix((vals, (rows, cols)), shape=(n, n))
+    labels = [f"mod_{i}" for i in range(n)]
+    return adj, labels
+
+
+def _hub_graph() -> tuple[sparse.csr_matrix, list[str]]:
+    """Build a hub graph: modules 1-4 all import module 0 (the hub).
+
+    adj[i, 0] = 1 for i in 1..4.
+    """
+    n = 5
+    rows = [1, 2, 3, 4]
+    cols = [0, 0, 0, 0]
+    vals = [1.0, 1.0, 1.0, 1.0]
+    adj = sparse.csr_matrix((vals, (rows, cols)), shape=(n, n))
+    labels = ["hub", "leaf_1", "leaf_2", "leaf_3", "leaf_4"]
+    return adj, labels
+
+
+def _isolated_graph(n: int = 4) -> tuple[sparse.csr_matrix, list[str]]:
+    """Build a graph with no edges (all isolated modules)."""
+    adj = sparse.csr_matrix(([], ([], [])), shape=(n, n))
+    labels = [f"isolated_{i}" for i in range(n)]
+    return adj, labels
+
+
+class TestChangeImpactAnalyzer:
+    def test_direct_dependents_chain(self):
+        """In A->B->C, changing C directly affects B (B imports C)."""
+        adj, labels = _chain_graph(3)
+        analyzer = ChangeImpactAnalyzer(adj, labels)
+        report = analyzer.analyze_change("mod_2")
+        assert "mod_1" in report.directly_affected
+        assert isinstance(report, ChangeImpactReport)
+
+    def test_transitive_dependents_chain(self):
+        """In A->B->C->D->E, changing E affects D, C, B, A transitively."""
+        adj, labels = _chain_graph(5)
+        analyzer = ChangeImpactAnalyzer(adj, labels)
+        report = analyzer.analyze_change("mod_4")
+        assert len(report.transitively_affected) == 4
+        assert report.critical_path_length == 4
+
+    def test_hub_bottleneck(self):
+        """Hub module (imported by all) should be a bottleneck."""
+        adj, labels = _hub_graph()
+        analyzer = ChangeImpactAnalyzer(adj, labels)
+        report = analyzer.analyze_change("hub")
+        assert len(report.directly_affected) == 4
+        assert report.is_bottleneck
+
+    def test_leaf_no_dependents(self):
+        """Leaf module (imports hub but nobody imports it) has no dependents."""
+        adj, labels = _hub_graph()
+        analyzer = ChangeImpactAnalyzer(adj, labels)
+        report = analyzer.analyze_change("leaf_1")
+        assert len(report.directly_affected) == 0
+        assert len(report.transitively_affected) == 0
+        assert report.impact_score == 0.0
+        assert not report.is_bottleneck
+
+    def test_isolated_modules(self):
+        """Isolated modules have zero impact."""
+        adj, labels = _isolated_graph()
+        analyzer = ChangeImpactAnalyzer(adj, labels)
+        report = analyzer.analyze_change("isolated_0")
+        assert report.impact_score == 0.0
+        assert report.critical_path_length == 0
+
+    def test_unknown_module_raises(self):
+        adj, labels = _chain_graph(3)
+        analyzer = ChangeImpactAnalyzer(adj, labels)
+        try:
+            analyzer.analyze_change("nonexistent")
+            assert False, "Should have raised ValueError"
+        except ValueError:
+            pass
+
+    def test_analyze_changes_multi(self):
+        """Changing multiple modules combines their blast radius."""
+        adj, labels = _chain_graph(5)
+        analyzer = ChangeImpactAnalyzer(adj, labels)
+        report = analyzer.analyze_changes(["mod_3", "mod_4"])
+        assert len(report.transitively_affected) >= 3
+
+    def test_analyze_changes_empty(self):
+        adj, labels = _chain_graph(3)
+        analyzer = ChangeImpactAnalyzer(adj, labels)
+        report = analyzer.analyze_changes([])
+        assert report.impact_score == 0.0
+
+    def test_find_bottlenecks(self):
+        """Hub should be found as a bottleneck."""
+        adj, labels = _hub_graph()
+        analyzer = ChangeImpactAnalyzer(adj, labels)
+        bottlenecks = analyzer.find_bottlenecks(threshold=0.3)
+        assert "hub" in bottlenecks
+
+    def test_find_safe_to_modify(self):
+        """Leaf modules should be safe to modify."""
+        adj, labels = _hub_graph()
+        analyzer = ChangeImpactAnalyzer(adj, labels)
+        safe = analyzer.find_safe_to_modify(threshold=0.1)
+        assert "leaf_1" in safe
+
+    def test_critical_path_chain(self):
+        """Critical path in A->B->C->D->E from E should be [E,D,C,B,A]."""
+        adj, labels = _chain_graph(5)
+        analyzer = ChangeImpactAnalyzer(adj, labels)
+        path = analyzer.critical_path("mod_4")
+        assert path[0] == "mod_4"
+        assert len(path) == 5
+
+    def test_critical_path_leaf(self):
+        """Critical path from a leaf is just the leaf itself."""
+        adj, labels = _hub_graph()
+        analyzer = ChangeImpactAnalyzer(adj, labels)
+        path = analyzer.critical_path("leaf_1")
+        assert path == ["leaf_1"]
+
+
+# ===================================================================
+# Module Health
+# ===================================================================
+
+
+class TestModuleHealth:
+    def test_hub_has_high_afferent(self):
+        """Hub module (many importers) should have high afferent coupling."""
+        adj, labels = _hub_graph()
+        health = compute_module_health(adj, labels)
+        hub_health = [h for h in health if h.module_name == "hub"][0]
+        assert hub_health.in_degree == 4
+        assert hub_health.afferent_coupling > 0.5
+        assert hub_health.is_hub
+
+    def test_leaf_has_high_efferent(self):
+        """Leaf that imports hub has efferent coupling."""
+        adj, labels = _hub_graph()
+        health = compute_module_health(adj, labels)
+        leaf = [h for h in health if h.module_name == "leaf_1"][0]
+        assert leaf.out_degree == 1
+        assert leaf.efferent_coupling > 0.0
+
+    def test_instability_hub_stable(self):
+        """Hub with only afferent coupling should have low instability."""
+        adj, labels = _hub_graph()
+        health = compute_module_health(adj, labels)
+        hub = [h for h in health if h.module_name == "hub"][0]
+        assert hub.instability < 0.5
+
+    def test_instability_leaf_unstable(self):
+        """Leaf with only efferent coupling should have high instability."""
+        adj, labels = _hub_graph()
+        health = compute_module_health(adj, labels)
+        leaf = [h for h in health if h.module_name == "leaf_1"][0]
+        assert leaf.instability > 0.5
+
+    def test_empty_graph(self):
+        adj = sparse.csr_matrix(([], ([], [])), shape=(0, 0))
+        health = compute_module_health(adj, [])
+        assert health == []
+
+    def test_isolated_modules(self):
+        """Isolated modules have zero coupling."""
+        adj, labels = _isolated_graph()
+        health = compute_module_health(adj, labels)
+        for h in health:
+            assert h.in_degree == 0
+            assert h.out_degree == 0
+
+    def test_returns_module_health_report(self):
+        adj, labels = _chain_graph(3)
+        health = compute_module_health(adj, labels)
+        assert len(health) == 3
+        assert all(isinstance(h, ModuleHealthReport) for h in health)

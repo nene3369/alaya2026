@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import numpy as np
 
 from lmm.integrations.langchain import (
     DharmaDocumentCompressor,
     DharmaExampleSelector,
+    DharmaRunnable,
+    langchain_tool_to_lmm,
+    register_langchain_tools,
     rerank_by_dharma_engine,
     rerank_by_diversity,
     rerank_by_diversity_adaptive,
@@ -100,3 +105,116 @@ class TestDharmaExampleSelector:
         selector = DharmaExampleSelector(k=3)
         selected = selector.select_examples({"input": "test"})
         assert selected == []
+
+
+# ---------------------------------------------------------------------------
+# Tool Bridge tests (no LangChain dependency)
+# ---------------------------------------------------------------------------
+
+
+class _FakeLCTool:
+    """Mimics LangChain BaseTool for testing without LangChain installed."""
+
+    name = "fake_search"
+    description = "Fake search tool for testing"
+
+    def invoke(self, params):
+        return f"searched for {params}"
+
+    async def ainvoke(self, params):
+        return f"async searched for {params}"
+
+
+class _FakeLCToolError:
+    """A LangChain-like tool that always raises."""
+
+    name = "error_tool"
+    description = "Always errors"
+
+    def invoke(self, params):
+        raise RuntimeError("tool error")
+
+
+class _FakeRunnable:
+    """Mimics a LangChain Runnable for testing."""
+
+    def invoke(self, params):
+        return f"chain result: {params}"
+
+
+class TestLangChainToolBridge:
+    def test_wrap_lc_tool_has_protocol_attrs(self):
+        lc_tool = _FakeLCTool()
+        wrapper = langchain_tool_to_lmm(lc_tool)
+        assert wrapper.name == "fake_search"
+        assert wrapper.description == "Fake search tool for testing"
+        assert wrapper.category == "langchain"
+
+    def test_execute_success(self):
+        lc_tool = _FakeLCTool()
+        wrapper = langchain_tool_to_lmm(lc_tool)
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(
+                wrapper.execute({"query": "test"}),
+            )
+        finally:
+            loop.close()
+        assert result.status.value == "success"
+        assert "searched" in str(result.output)
+
+    def test_execute_error(self):
+        lc_tool = _FakeLCToolError()
+        wrapper = langchain_tool_to_lmm(lc_tool)
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(
+                wrapper.execute({"query": "test"}),
+            )
+        finally:
+            loop.close()
+        assert result.status.value == "error"
+        assert "tool error" in result.error
+
+    def test_custom_category(self):
+        lc_tool = _FakeLCTool()
+        wrapper = langchain_tool_to_lmm(lc_tool, category="search")
+        assert wrapper.category == "search"
+
+
+class TestRegisterLangChainTools:
+    def test_registers_multiple_tools(self):
+        from lmm.tools.base import ToolRegistry
+        registry = ToolRegistry()
+        tools = [_FakeLCTool(), _FakeLCTool()]
+        count = register_langchain_tools(tools, registry)
+        # Both have same name so only 1 slot in registry, but count=2
+        assert count == 2
+
+    def test_returns_count(self):
+        from lmm.tools.base import ToolRegistry
+        registry = ToolRegistry()
+        count = register_langchain_tools([], registry)
+        assert count == 0
+
+
+class TestDharmaRunnable:
+    def test_execute_with_dict_input(self):
+        runnable = _FakeRunnable()
+        tool = DharmaRunnable(runnable, name="test_chain")
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(
+                tool.execute({"input": "hello"}),
+            )
+        finally:
+            loop.close()
+        assert result.status.value == "success"
+        assert "chain result" in str(result.output)
+
+    def test_satisfies_tool_protocol(self):
+        runnable = _FakeRunnable()
+        tool = DharmaRunnable(runnable, name="my_chain", description="a chain")
+        assert tool.name == "my_chain"
+        assert tool.description == "a chain"
+        assert tool.category == "langchain"
