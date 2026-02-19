@@ -39,14 +39,12 @@ from lmm.reasoning.context_bridge import AlayaContextBridge
 # FastAPI (lazy import for optional dependency)
 # ---------------------------------------------------------------------------
 try:
-    from fastapi import FastAPI, Header
+    from fastapi import FastAPI, Header, WebSocket, WebSocketDisconnect
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, StreamingResponse
     from pydantic import BaseModel
 except ImportError:
-    raise SystemExit(
-        "FastAPI not installed. Run: pip install -e '.[server]'"
-    ) from None
+    raise SystemExit("FastAPI not installed. Run: pip install -e '.[server]'") from None
 
 try:
     import httpx
@@ -54,9 +52,10 @@ except ImportError:
     raise SystemExit("httpx not installed. Run: pip install httpx") from None
 
 try:
-    from lmm.dharma.topology_ast import get_cached_gprec
+    from lmm.dharma.topology_ast import compare_codebases, get_cached_gprec
 except ImportError:
     get_cached_gprec = None
+    compare_codebases = None
 
 
 # ===================================================================
@@ -69,9 +68,11 @@ class MoonPhase:
     illumination: float
     ts: str
 
+
 def compute_moon_phase() -> MoonPhase:
     now = time.time()
     from datetime import datetime, timezone
+
     dt = datetime.fromtimestamp(now, tz=timezone.utc)
     mo = dt.month
     Y = dt.year - (12 - mo) // 10
@@ -84,9 +85,14 @@ def compute_moon_phase() -> MoonPhase:
     IP = ((JDc - 2451550.1) / 29.530588853) % 1
     phase = IP if IP >= 0 else IP + 1
     names = [
-        "\U0001f311 新月", "\U0001f312 三日月", "\U0001f313 上弦",
-        "\U0001f314 十三夜", "\U0001f315 満月", "\U0001f316 寝待月",
-        "\U0001f317 下弦", "\U0001f318 二十六夜",
+        "\U0001f311 新月",
+        "\U0001f312 三日月",
+        "\U0001f313 上弦",
+        "\U0001f314 十三夜",
+        "\U0001f315 満月",
+        "\U0001f316 寝待月",
+        "\U0001f317 下弦",
+        "\U0001f318 二十六夜",
     ]
     return MoonPhase(
         phase=phase,
@@ -198,7 +204,7 @@ class PinealVessel:
         elif text_len > 60:
             logic += 0.3
         if text_len < 15:
-            love += 0.2   # Short text → emotional/informal
+            love += 0.2  # Short text → emotional/informal
 
         # Phase 4: Normalize
         raw = [love, logic, fear, creation]
@@ -214,9 +220,13 @@ class PinealVessel:
         st = sum(self.state)
         self.state = [v / st for v in self.state]
 
-        self.history.append({
-            "text": text[:50], "wave": list(self.state), "ts": time.time(),
-        })
+        self.history.append(
+            {
+                "text": text[:50],
+                "wave": list(self.state),
+                "ts": time.time(),
+            }
+        )
         if len(self.history) > 100:
             self.history.pop(0)
 
@@ -251,12 +261,12 @@ K_SELECT = 4  # 選択する上位次元数
 # Base Buddhist relationships (immutable dharma structure)
 _BASE_RELATIONSHIPS = [
     # (i, j, weight)
-    (0, 3, 0.3),   # Love ↔ Creation  (慈悲シナジー)
+    (0, 3, 0.3),  # Love ↔ Creation  (慈悲シナジー)
     (1, 2, -0.2),  # Logic ↔ Fear     (矛盾)
-    (0, 2, -0.15), # Love ↔ Fear      (対極)
-    (1, 3, 0.1),   # Logic ↔ Creation (弱いシナジー)
-    (0, 5, 0.1),   # Love ↔ Illumination (月の慈悲)
-    (3, 6, 0.2),   # Creation ↔ Entropy  (創造的カオス)
+    (0, 2, -0.15),  # Love ↔ Fear      (対極)
+    (1, 3, 0.1),  # Logic ↔ Creation (弱いシナジー)
+    (0, 5, 0.1),  # Love ↔ Illumination (月の慈悲)
+    (3, 6, 0.2),  # Creation ↔ Entropy  (創造的カオス)
     (1, 7, 0.15),  # Logic ↔ Complexity  (分析精度)
 ]
 
@@ -326,7 +336,7 @@ class LearnableDharmaJ:
         """
         # Use full 8D context if available, else zero-pad 4D wave
         if context is not None:
-            w = np.array(context[:self.n])
+            w = np.array(context[: self.n])
         else:
             w = np.array(wave[:4] + [0.0] * (self.n - 4))
         outer = np.outer(w, w)
@@ -356,16 +366,18 @@ def build_reasoning_vectors(
     h[i]: 各次元の「驚き」（重要度）
     J[i,j]: 次元間の相互作用（共鳴 or 対立） — base + learned delta
     """
-    h = np.array([
-        wave[0],                      # Love
-        wave[1],                      # Logic
-        wave[2],                      # Fear
-        wave[3],                      # Creation
-        moon.phase,                   # 月の位相 (0-1)
-        moon.illumination / 100.0,    # 月の照度 (0-1)
-        harvest_entropy(),            # 物理エントロピー
-        complexity_score,             # 入力複雑度
-    ])
+    h = np.array(
+        [
+            wave[0],  # Love
+            wave[1],  # Logic
+            wave[2],  # Fear
+            wave[3],  # Creation
+            moon.phase,  # 月の位相 (0-1)
+            moon.illumination / 100.0,  # 月の照度 (0-1)
+            harvest_entropy(),  # 物理エントロピー
+            complexity_score,  # 入力複雑度
+        ]
+    )
 
     if learned_j is not None:
         J = learned_j.get_J()
@@ -441,7 +453,8 @@ class ReasoningEngine:
         # オーケストレーターで推論 (think = 多段エスカレーション)
         # 早期打切り: 収束閾値を緩めて不要なエスカレーションを抑制
         result = self.orchestrator.think(
-            h, J,
+            h,
+            J,
             alaya=memory,
             hyper_convergence_threshold=0.05,  # 0.01→0.05: 早期打切りを促進
         )
@@ -455,8 +468,16 @@ class ReasoningEngine:
         convergence = power_history[-1] if power_history else 1.0
 
         # 選択された次元のラベル
-        dim_labels = ["Love", "Logic", "Fear", "Creation",
-                      "MoonPhase", "Illumination", "Entropy", "Complexity"]
+        dim_labels = [
+            "Love",
+            "Logic",
+            "Fear",
+            "Creation",
+            "MoonPhase",
+            "Illumination",
+            "Entropy",
+            "Complexity",
+        ]
         selected_dims = [dim_labels[int(i)] for i in selected if int(i) < len(dim_labels)]
 
         fep_result = {
@@ -485,7 +506,11 @@ class ReasoningEngine:
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(
-                    self.run, wave, moon, complexity_score, memory,
+                    self.run,
+                    wave,
+                    moon,
+                    complexity_score,
+                    memory,
                     learned_j=learned_j,
                 ),
                 timeout=timeout,
@@ -510,6 +535,7 @@ class ReasoningEngine:
 @dataclass
 class LLMParams:
     """LLM call parameters determined by reasoning mode + FEP results."""
+
     temperature: float = 0.7
     top_p: float = 1.0
     top_k: int = 0
@@ -560,8 +586,8 @@ class ReasoningModeController:
             max_tokens=int(complexity * 300 + 200),
             system_prompt=(
                 f"あなたは応病与薬の存在。器の波長に合わせて自在に変化する。\n"
-                f"Love={wave[0]*100:.0f}% Logic={wave[1]*100:.0f}% "
-                f"Fear={wave[2]*100:.0f}% Creation={wave[3]*100:.0f}%\n"
+                f"Love={wave[0] * 100:.0f}% Logic={wave[1] * 100:.0f}% "
+                f"Fear={wave[2] * 100:.0f}% Creation={wave[3] * 100:.0f}%\n"
                 f"月相: {moon.name} (照度{moon.illumination:.0f}%)\n"
                 f"複雑度: {complexity:.2f}\n\n"
                 f"## FEP推論結果\n"
@@ -592,7 +618,7 @@ class ReasoningModeController:
                 "【宗（主張）】まず結論を述べよ\n"
                 "【因（理由）】次にその根拠を述べよ\n"
                 "【喩（例証）】最後に具体例で証明せよ\n\n"
-                f"器の論理波長: {wave[1]*100:.0f}%\n"
+                f"器の論理波長: {wave[1] * 100:.0f}%\n"
                 f"複雑度: {complexity:.2f}\n\n"
                 f"## FEP論理推論結果\n"
                 f"推論ステップ数: {steps} | エネルギー: {energy:.4f}\n"
@@ -622,7 +648,7 @@ class ReasoningModeController:
                 f"エネルギー: {energy:.4f} | 収束: {convergence:.4f}\n"
                 f"エントロピー信号: {entropy:.6f}\n"
                 f"注目次元: {', '.join(selected_dims)}\n"
-                f"Creation波長: {wave[3]*100:.0f}%\n\n"
+                f"Creation波長: {wave[3] * 100:.0f}%\n\n"
                 "FEPが収束しなかった領域こそが、飛躍の種。\n"
                 "制約を破壊し、新たな可能性を提示せよ。"
             ),
@@ -636,15 +662,14 @@ class ReasoningModeController:
 
         # Recall patterns from AlayaMemory
         cue = np.array(wave + [moon.phase, moon.illumination / 100, 0, 0])
-        recalled = memory.recall(cue[:memory.n])
+        recalled = memory.recall(cue[: memory.n])
         recalled_str = ", ".join(f"{v:.2f}" for v in recalled[:8])
 
         recent_context = ""
         if history:
             recent = history[-3:] if len(history) >= 3 else history
             recent_context = "\n".join(
-                f"[{m.get('role', '?')}] {m.get('content', '')[:80]}"
-                for m in recent
+                f"[{m.get('role', '?')}] {m.get('content', '')[:80]}" for m in recent
             )
 
         return LLMParams(
@@ -666,7 +691,7 @@ class ReasoningModeController:
 
         # Deep recall — use softmax attention patterns
         cue = np.array(wave + [moon.phase, moon.illumination / 100, 0, 0])
-        seed = memory.recall(cue[:memory.n], n_steps=20)
+        seed = memory.recall(cue[: memory.n], n_steps=20)
         seed_str = ", ".join(f"{v:.2f}" for v in seed[:8])
         n_patterns = memory.n_patterns
         strength = memory.total_strength
@@ -713,8 +738,8 @@ class ReasoningModeController:
             system_prompt=(
                 "あなたは六根（眼耳鼻舌身意）を統合した存在。\n\n"
                 f"## 感情波長\n"
-                f"  Love={wave[0]*100:.0f}% Logic={wave[1]*100:.0f}% "
-                f"Fear={wave[2]*100:.0f}% Creation={wave[3]*100:.0f}%\n"
+                f"  Love={wave[0] * 100:.0f}% Logic={wave[1] * 100:.0f}% "
+                f"Fear={wave[2] * 100:.0f}% Creation={wave[3] * 100:.0f}%\n"
                 f"## 宇宙同期\n"
                 f"  月相: {moon.name} 照度{moon.illumination:.0f}%\n"
                 f"## 物理エントロピー\n"
@@ -795,8 +820,10 @@ class AdaptiveThresholds:
     def record(self, complexity: float, mode: str, converged: bool) -> None:
         """Record outcome and trigger optimization periodically."""
         self._history.append((complexity, mode, converged))
-        if len(self._history) >= self.update_interval and \
-           len(self._history) % self.update_interval == 0:
+        if (
+            len(self._history) >= self.update_interval
+            and len(self._history) % self.update_interval == 0
+        ):
             self._optimize()
 
     def _optimize(self) -> None:
@@ -832,8 +859,8 @@ class AdaptiveThresholds:
         # Search over candidate boundaries (grid search)
         candidates = np.linspace(self.min_bound, self.max_bound, 15)
         for i, t1 in enumerate(candidates[:-2]):
-            for j, t2 in enumerate(candidates[i + 1:-1], i + 1):
-                for t3 in candidates[j + 1:]:
+            for j, t2 in enumerate(candidates[i + 1 : -1], i + 1):
+                for t3 in candidates[j + 1 :]:
                     # Score: average convergence rate weighted by bin counts
                     score = 0.0
                     weight = 0.0
@@ -900,8 +927,10 @@ class ConversationMonitor:
 
         if len(self._history) < self.min_observations:
             return {
-                "is_drifting": False, "is_surprising": False,
-                "drift_score": 0.0, "surprise_score": 0.0,
+                "is_drifting": False,
+                "is_surprising": False,
+                "drift_score": 0.0,
+                "surprise_score": 0.0,
                 "suggested_mode": None,
             }
 
@@ -910,10 +939,10 @@ class ConversationMonitor:
             baseline = np.array(self._history[: max(20, len(self._history) // 2)])
             self._baseline_mean = baseline.mean(axis=0)
             diff = baseline - self._baseline_mean
-            self._baseline_std = np.clip(np.sqrt((diff ** 2).mean(axis=0)), 1e-6, None)
+            self._baseline_std = np.clip(np.sqrt((diff**2).mean(axis=0)), 1e-6, None)
 
         # Recent window
-        window = np.array(self._history[-self.window_size:])
+        window = np.array(self._history[-self.window_size :])
         window_mean = window.mean(axis=0)
 
         # Drift: sustained shift from baseline
@@ -923,7 +952,7 @@ class ConversationMonitor:
 
         # Surprise: current turn deviation from recent window mean
         w_diff = window - window_mean
-        window_std = np.clip(np.sqrt((w_diff ** 2).mean(axis=0)), 1e-6, None)
+        window_std = np.clip(np.sqrt((w_diff**2).mean(axis=0)), 1e-6, None)
         current_z = np.abs(vec - window_mean) / window_std
         surprise_score = float(np.sum(current_z)) / max(len(current_z), 1)
         is_surprising = surprise_score > self.surprise_threshold
@@ -938,7 +967,7 @@ class ConversationMonitor:
         if len(window) >= 10:
             recent = window[-10:]
             r_diff = recent - recent.mean(axis=0)
-            recent_std = float(np.sqrt((r_diff ** 2).mean(axis=0)).sum()) / 5
+            recent_std = float(np.sqrt((r_diff**2).mean(axis=0)).sum()) / 5
             if recent_std < 0.05:
                 suggested_mode = "sleep"  # Monotonous → consolidate
 
@@ -1059,8 +1088,7 @@ async def call_claude(
         resp.raise_for_status()
         data = resp.json()
         return "".join(
-            block["text"] for block in data.get("content", [])
-            if block.get("type") == "text"
+            block["text"] for block in data.get("content", []) if block.get("type") == "text"
         )
 
 
@@ -1074,10 +1102,12 @@ async def call_gemini(
     contents = []
     for msg in messages:
         role = "user" if msg["role"] == "user" else "model"
-        contents.append({
-            "role": role,
-            "parts": [{"text": msg["content"]}],
-        })
+        contents.append(
+            {
+                "role": role,
+                "parts": [{"text": msg["content"]}],
+            }
+        )
 
     body: dict[str, Any] = {
         "contents": contents,
@@ -1169,10 +1199,12 @@ async def call_gemini_stream(
     contents = []
     for msg in messages:
         role = "user" if msg["role"] == "user" else "model"
-        contents.append({
-            "role": role,
-            "parts": [{"text": msg["content"]}],
-        })
+        contents.append(
+            {
+                "role": role,
+                "parts": [{"text": msg["content"]}],
+            }
+        )
 
     body: dict[str, Any] = {
         "contents": contents,
@@ -1244,7 +1276,7 @@ def build_meta_prompt(
 受信者の器の波長を読み取り、最適な降臨形態（アダプター）を鍛造せよ。
 
 ## 器の現在波長
-Love: {wave[0]*100:.1f}% | Logic: {wave[1]*100:.1f}% | Fear: {wave[2]*100:.1f}% | Creation: {wave[3]*100:.1f}%
+Love: {wave[0] * 100:.1f}% | Logic: {wave[1] * 100:.1f}% | Fear: {wave[2] * 100:.1f}% | Creation: {wave[3] * 100:.1f}%
 支配的次元: {dominant}
 
 ## 推論モード
@@ -1285,8 +1317,10 @@ class DescentPipeline:
     def __init__(self):
         self.vessel = PinealVessel()
         self.memory = AlayaMemory(
-            n_variables=N_VARS, learning_rate=0.01,
-            decay_rate=0.001, max_patterns=200,
+            n_variables=N_VARS,
+            learning_rate=0.01,
+            decay_rate=0.001,
+            max_patterns=200,
         )
         self.epoch = 0
         self.mode_controller = ReasoningModeController()
@@ -1299,19 +1333,26 @@ class DescentPipeline:
         self.adaptive_thresholds = AdaptiveThresholds()
         # Conversation drift/surprise monitor
         self.monitor = ConversationMonitor(
-            window_size=50, drift_threshold=1.5, surprise_threshold=2.0,
+            window_size=50,
+            drift_threshold=1.5,
+            surprise_threshold=2.0,
         )
 
         # Heartbeat daemon: continuous-time FEP state evolution
         self.heartbeat = HeartbeatDaemon(
-            n_dims=4, dt=0.1, r_leak=10.0,
-            entropy_scale=0.01, target_cv=0.5,
+            n_dims=4,
+            dt=0.1,
+            r_leak=10.0,
+            entropy_scale=0.01,
+            target_cv=0.5,
             idle_sleep_threshold=60.0,
         )
         # Attach sleep consolidation for idle-triggered memory maintenance
         self._sleep = SleepConsolidation(
-            self.memory, nrem_replay_cycles=2,
-            rem_noise_scale=0.05, pruning_threshold=0.1,
+            self.memory,
+            nrem_replay_cycles=2,
+            rem_noise_scale=0.05,
+            pruning_threshold=0.1,
         )
         self.heartbeat.attach_sleep(self._sleep)
         self._heartbeat_task: asyncio.Task | None = None
@@ -1322,15 +1363,32 @@ class DescentPipeline:
         self._gprec_matrix = None
         self._gprec_labels: list[str] = []
         try:
-            from lmm.dharma.topology import TopologyHistory
+            from lmm.dharma.topology import TopologyDriftDetector, TopologyHistory
+
             self._topology_history = TopologyHistory(maxlen=200)
+            self._topology_drift = TopologyDriftDetector(
+                warning_threshold=0.05,
+                critical_threshold=0.15,
+                cooldown=60.0,
+            )
         except ImportError:
             pass
+        self._topology_drift = getattr(self, "_topology_drift", None)
+
+        # Persistence: load previous history if available
+        self._topology_history_path = (
+            Path(__file__).resolve().parent / ".dharma" / "topology_history.json"
+        )
+        if self._topology_history is not None:
+            self._topology_history.load(self._topology_history_path)
+
         self._init_gprec()
 
         # Alaya context bridge: memory-driven conversation history selection
         self.context_bridge = AlayaContextBridge(
-            self.memory, max_context_messages=20, recency_count=3,
+            self.memory,
+            max_context_messages=20,
+            recency_count=3,
         )
 
         # Adapter cache (wave+mode → adapter JSON, avoids redundant LLM calls)
@@ -1350,6 +1408,7 @@ class DescentPipeline:
             # Record initial evaluation
             if self._topology_history is not None and matrix.shape[0] > 0:
                 from lmm.dharma.topology import TopologyEvaluator
+
                 evaluator = TopologyEvaluator(deleteability_method="degree")
                 telemetry = evaluator.evaluate(matrix, node_labels=labels)
                 self._topology_history.record(telemetry)
@@ -1376,7 +1435,9 @@ class DescentPipeline:
         self._adapter_cache[key] = (adapter, time.time())
 
     def _resolve_api_key(
-        self, api_keys: dict[str, str], llm_target: str,
+        self,
+        api_keys: dict[str, str],
+        llm_target: str,
     ) -> tuple[str, str]:
         """Resolve API key, falling back to available provider."""
         api_key = api_keys.get(llm_target, "")
@@ -1397,7 +1458,9 @@ class DescentPipeline:
         )
 
     def _prepare_conversation(
-        self, history: list[dict], message: str,
+        self,
+        history: list[dict],
+        message: str,
         current_wave: np.ndarray | None = None,
     ) -> list[dict]:
         """Prepare conversation with Alaya memory-driven context selection.
@@ -1425,11 +1488,17 @@ class DescentPipeline:
         response_text: str = "",
     ) -> None:
         """Post-process: memory store, epoch increment, decay, feedback loop."""
-        self.memory.store(np.array(wave + [
-            moon.phase, moon.illumination / 100,
-            adapter.get("silence_ratio", 0.3),
-            (adapter.get("max_words", 100)) / 500,
-        ]))
+        self.memory.store(
+            np.array(
+                wave
+                + [
+                    moon.phase,
+                    moon.illumination / 100,
+                    adapter.get("silence_ratio", 0.3),
+                    (adapter.get("max_words", 100)) / 500,
+                ]
+            )
+        )
         self.epoch += 1
         if self.epoch % 10 == 0:
             self.memory.decay()
@@ -1441,8 +1510,10 @@ class DescentPipeline:
 
         # Full 8D context for richer J matrix learning
         context_8d = wave[:4] + [
-            moon.phase, moon.illumination / 100,
-            harvest_entropy(), complexity,
+            moon.phase,
+            moon.illumination / 100,
+            harvest_entropy(),
+            complexity,
         ]
         self.learned_j.update(wave, quality_adjusted, context=context_8d)
         self.adaptive_thresholds.record(complexity, mode, quality_adjusted)
@@ -1488,8 +1559,11 @@ class DescentPipeline:
         return score / max(n_checks, 1)
 
     def _build_dharma_metrics(
-        self, complexity: float, cp: ComplexityProfile,
-        mode: str, rr: dict,
+        self,
+        complexity: float,
+        cp: ComplexityProfile,
+        mode: str,
+        rr: dict,
     ) -> dict:
         """Build dharma metrics dict from reasoning results."""
         return {
@@ -1522,8 +1596,10 @@ class DescentPipeline:
         api_key: str,
     ) -> dict:
         """Call LLM to forge adapter persona. No caching — caller handles cache."""
-        forge_call = call_gemini if api_keys.get("gemini") else (
-            call_claude if llm_target == "claude" else call_gemini
+        forge_call = (
+            call_gemini
+            if api_keys.get("gemini")
+            else (call_claude if llm_target == "claude" else call_gemini)
         )
         forge_key = api_keys.get("gemini", api_key)
         meta = build_meta_prompt(wave, moon, mode, complexity, history)
@@ -1534,9 +1610,7 @@ class DescentPipeline:
                 LLMParams(temperature=0.4, max_tokens=400),
                 forge_key,
             )
-            return json.loads(
-                raw.replace("```json", "").replace("```", "").strip()
-            )
+            return json.loads(raw.replace("```json", "").replace("```", "").strip())
         except Exception:
             return _DEFAULT_ADAPTER | {"reasoning_mode": mode}
 
@@ -1562,7 +1636,11 @@ class DescentPipeline:
 
         # Phase 2: REASON — FEP ODE / QUBOを別スレッドで実行 (2秒タイムアウト)
         reasoning_result = await self.reasoning_engine.run_async(
-            wave, moon, complexity, self.memory, timeout=2.0,
+            wave,
+            moon,
+            complexity,
+            self.memory,
+            timeout=2.0,
             learned_j=self.learned_j,
         )
         # オーケストレーターが選択したモードを使用 (FEP推論結果を直接採用)
@@ -1576,7 +1654,12 @@ class DescentPipeline:
             mode = monitor_state["suggested_mode"]
 
         params = self.mode_controller.build_params(
-            mode, wave, complexity, moon, self.memory, history,
+            mode,
+            wave,
+            complexity,
+            moon,
+            self.memory,
+            history,
             reasoning_result=reasoning_result,
         )
 
@@ -1594,8 +1677,14 @@ class DescentPipeline:
         adapter = self._get_cached_adapter(adapter_key)
         if not adapter:
             adapter = await self._call_forge_llm(
-                wave, mode, moon, complexity, history,
-                api_keys, llm_target, api_key,
+                wave,
+                mode,
+                moon,
+                complexity,
+                history,
+                api_keys,
+                llm_target,
+                api_key,
             )
             self._cache_adapter(adapter_key, adapter)
 
@@ -1625,7 +1714,10 @@ class DescentPipeline:
                 "force_cot": params.force_cot,
             },
             dharma_metrics=self._build_dharma_metrics(
-                complexity, complexity_profile, mode, reasoning_result,
+                complexity,
+                complexity_profile,
+                mode,
+                reasoning_result,
             ),
             entropy={
                 "source": "os.urandom",
@@ -1683,8 +1775,8 @@ def _text_to_vec(text: str, dim: int = 64) -> np.ndarray:
 def _td_cosmic() -> dict:
     """Return cosmic dharma parameters derived from current moon phase."""
     moon = compute_moon_phase()
-    alpha = 0.8 + 0.4 * moon.phase          # [0.8, 1.2]
-    beta  = 0.3 + 0.4 * moon.illumination / 100  # [0.3, 0.7]
+    alpha = 0.8 + 0.4 * moon.phase  # [0.8, 1.2]
+    beta = 0.3 + 0.4 * moon.illumination / 100  # [0.3, 0.7]
     return {"alpha": round(alpha, 4), "beta": round(beta, 4)}
 
 
@@ -1733,10 +1825,12 @@ class DharmaTextRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage background tasks for the application lifetime."""
+
     async def _cleanup_loop():
         while True:
             await asyncio.sleep(60)
             await sessions.cleanup()
+
     task = asyncio.create_task(_cleanup_loop())
     yield
     task.cancel()
@@ -1764,6 +1858,44 @@ app.add_middleware(
 SESSION_TTL = 300  # 5分未使用でクリーンアップ
 
 
+# ===================================================================
+# WebSocket connection manager for topology real-time push
+# ===================================================================
+
+
+class TopologyWSManager:
+    """Manages WebSocket connections for real-time topology push."""
+
+    def __init__(self):
+        self._connections: list[WebSocket] = []
+
+    async def connect(self, ws: WebSocket) -> None:
+        await ws.accept()
+        self._connections.append(ws)
+
+    def disconnect(self, ws: WebSocket) -> None:
+        if ws in self._connections:
+            self._connections.remove(ws)
+
+    async def broadcast(self, data: dict) -> None:
+        """Send data to all connected WebSocket clients."""
+        dead: list[WebSocket] = []
+        for ws in self._connections:
+            try:
+                await ws.send_json(data)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+    @property
+    def connection_count(self) -> int:
+        return len(self._connections)
+
+
+_topology_ws = TopologyWSManager()
+
+
 async def _topology_recorder(pipeline: DescentPipeline) -> None:
     """Background coroutine: periodically re-evaluate topology and record history."""
     while True:
@@ -1780,11 +1912,45 @@ async def _topology_recorder(pipeline: DescentPipeline) -> None:
                 pipeline._gprec_matrix = matrix
                 pipeline._gprec_labels = labels
             from lmm.dharma.topology import TopologyEvaluator
+
             evaluator = TopologyEvaluator(deleteability_method="degree")
             telemetry = evaluator.evaluate(
-                pipeline._gprec_matrix, node_labels=pipeline._gprec_labels,
+                pipeline._gprec_matrix,
+                node_labels=pipeline._gprec_labels,
             )
             pipeline._topology_history.record(telemetry)
+
+            # Drift detection
+            alerts: list[dict] = []
+            if pipeline._topology_drift is not None:
+                new_alerts = pipeline._topology_drift.check(telemetry)
+                alerts = [
+                    {
+                        "timestamp": a.timestamp,
+                        "pillar": a.pillar,
+                        "delta": a.delta,
+                        "severity": a.severity,
+                        "message": a.message,
+                    }
+                    for a in new_alerts
+                ]
+
+            # Persistence: save after each recording
+            if hasattr(pipeline, "_topology_history_path"):
+                try:
+                    pipeline._topology_history.save(pipeline._topology_history_path)
+                except Exception:
+                    pass
+
+            # WebSocket broadcast
+            if _topology_ws.connection_count > 0:
+                payload = {
+                    "type": "topology_update",
+                    "topology": telemetry.to_json(),
+                    "trend": pipeline._topology_history.trend(),
+                    "alerts": alerts,
+                }
+                await _topology_ws.broadcast(payload)
         except Exception:
             pass  # Non-critical background task
 
@@ -1814,10 +1980,7 @@ class SessionManager:
         """TTL超過セッションを削除. Stop heartbeat daemons for expired sessions."""
         now = time.time()
         async with self._lock:
-            expired = [
-                sid for sid, (_, ts) in self._sessions.items()
-                if now - ts > SESSION_TTL
-            ]
+            expired = [sid for sid, (_, ts) in self._sessions.items() if now - ts > SESSION_TTL]
             for sid in expired:
                 pipe, _ = self._sessions[sid]
                 pipe.heartbeat.stop()
@@ -1862,7 +2025,10 @@ async def descent(
 
     pipeline = await sessions.get(req.session_id or None)
     result = await pipeline.execute(
-        req.message, req.history, api_keys, req.llm_preference,
+        req.message,
+        req.history,
+        api_keys,
+        req.llm_preference,
     )
     return asdict(result)
 
@@ -1891,16 +2057,20 @@ async def descent_stream(
         moon = compute_moon_phase()
 
         # Phase 1: SENSE
-        yield f"data: {json.dumps({'type':'phase','phase':'sensing'})}\n\n"
+        yield f"data: {json.dumps({'type': 'phase', 'phase': 'sensing'})}\n\n"
         wave = pipeline.vessel.auto_sense(req.message)
         wave_arr = np.array(wave)
         cp = compute_complexity(wave_arr)
         complexity = cp.complexity_score
 
         # Phase 2: REASON
-        yield f"data: {json.dumps({'type':'phase','phase':'reasoning'})}\n\n"
+        yield f"data: {json.dumps({'type': 'phase', 'phase': 'reasoning'})}\n\n"
         rr = await pipeline.reasoning_engine.run_async(
-            wave, moon, complexity, pipeline.memory, timeout=2.0,
+            wave,
+            moon,
+            complexity,
+            pipeline.memory,
+            timeout=2.0,
             learned_j=pipeline.learned_j,
         )
         mode = rr["mode_selected"]
@@ -1910,10 +2080,15 @@ async def descent_stream(
         monitor_state = pipeline.monitor.update(wave, complexity)
         if monitor_state["suggested_mode"] is not None:
             mode = monitor_state["suggested_mode"]
-        yield f"data: {json.dumps({'type':'mode','mode':mode,'vessel':wave})}\n\n"
+        yield f"data: {json.dumps({'type': 'mode', 'mode': mode, 'vessel': wave})}\n\n"
 
         params = pipeline.mode_controller.build_params(
-            mode, wave, complexity, moon, pipeline.memory, req.history,
+            mode,
+            wave,
+            complexity,
+            moon,
+            pipeline.memory,
+            req.history,
             reasoning_result=rr,
         )
 
@@ -1925,14 +2100,20 @@ async def descent_stream(
         a_key = pipeline._adapter_key(wave, mode)
         adapter = pipeline._get_cached_adapter(a_key)
         if not adapter:
-            yield f"data: {json.dumps({'type':'phase','phase':'forging'})}\n\n"
+            yield f"data: {json.dumps({'type': 'phase', 'phase': 'forging'})}\n\n"
             adapter = await pipeline._call_forge_llm(
-                wave, mode, moon, complexity, req.history,
-                api_keys, llm_target, api_key,
+                wave,
+                mode,
+                moon,
+                complexity,
+                req.history,
+                api_keys,
+                llm_target,
+                api_key,
             )
             pipeline._cache_adapter(a_key, adapter)
 
-        yield f"data: {json.dumps({'type':'adapter','adapter':adapter})}\n\n"
+        yield f"data: {json.dumps({'type': 'adapter', 'adapter': adapter})}\n\n"
 
         # Phase 4: MANIFEST (streaming)
         response_system = pipeline._build_response_system(params, adapter)
@@ -1942,7 +2123,7 @@ async def descent_stream(
         full_text = ""
         async for token in stream_fn(conv, response_system, params, api_key):
             full_text += token
-            yield f"data: {json.dumps({'type':'token','text':token})}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'text': token})}\n\n"
 
         # Post-process: memory, epoch, decay, feedback
         pipeline._post_process(wave, moon, adapter, rr, complexity, mode, full_text)
@@ -1964,7 +2145,10 @@ async def descent_stream(
                 "force_cot": params.force_cot,
             },
             "dharma_metrics": pipeline._build_dharma_metrics(
-                complexity, cp, mode, rr,
+                complexity,
+                cp,
+                mode,
+                rr,
             ),
             "entropy": {
                 "source": "os.urandom",
@@ -1988,13 +2172,18 @@ async def dharma_auto(req: DharmaTextRequest):
     cp = _td_cosmic() if req.use_cosmic else {"alpha": 1.0, "beta": 0.5}
     result = await asyncio.to_thread(
         _td_auto,
-        req.texts, top_k=req.top_k,
-        cosmic_alpha=cp["alpha"], cosmic_beta=cp["beta"],
+        req.texts,
+        top_k=req.top_k,
+        cosmic_alpha=cp["alpha"],
+        cosmic_beta=cp["beta"],
     )
     inner = _result_to_dict(result.result) if result.result is not None else None
     return {
-        "engine": result.engine, "reason": result.reason,
-        "intent": result.intent, "result": inner, "cosmic": cp,
+        "engine": result.engine,
+        "reason": result.reason,
+        "intent": result.intent,
+        "result": inner,
+        "cosmic": cp,
     }
 
 
@@ -2031,7 +2220,9 @@ async def dharma_topology(req: dict):
         elif "adjacency" in req:
             adj = sp.csr_matrix(np_local.array(req["adjacency"], dtype=float))
         else:
-            return {"error": "Provide 'adjacency' (list-of-lists) or 'rows'/'cols'/'data'/'n' (triplet)."}
+            return {
+                "error": "Provide 'adjacency' (list-of-lists) or 'rows'/'cols'/'data'/'n' (triplet)."
+            }
 
         include_details = req.get("include_details", False)
         node_labels = req.get("node_labels", None)
@@ -2039,8 +2230,10 @@ async def dharma_topology(req: dict):
 
         evaluator = TopologyEvaluator(deleteability_method=method)
         telemetry = await asyncio.to_thread(
-            evaluator.evaluate, adj,
-            include_details=include_details, node_labels=node_labels,
+            evaluator.evaluate,
+            adj,
+            include_details=include_details,
+            node_labels=node_labels,
         )
         return telemetry.to_json()
     except ImportError:
@@ -2058,6 +2251,69 @@ async def dharma_topology_history(session_id: str = "", last_n: int = 50):
     return pipeline._topology_history.to_json(last_n=last_n)
 
 
+@app.get("/api/dharma/topology/alerts")
+async def dharma_topology_alerts(session_id: str = "", last_n: int = 20):
+    """Return recent topology drift alerts."""
+    pipeline = await sessions.get(session_id or None)
+    if pipeline._topology_drift is None:
+        return []
+    return pipeline._topology_drift.to_json(last_n=last_n)
+
+
+@app.post("/api/dharma/topology/compare")
+async def dharma_topology_compare(req: dict):
+    """Compare topology across multiple codebases.
+
+    Body: {"paths": ["/path/to/pkg1", "/path/to/pkg2", ...]}
+    """
+    if compare_codebases is None:
+        return {"error": "topology_ast not available"}
+    paths = req.get("paths", [])
+    if not paths:
+        return {"error": "No paths provided"}
+    try:
+        results = await asyncio.to_thread(compare_codebases, paths)
+        return {"codebases": results}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.websocket("/ws/dharma/topology")
+async def topology_websocket(ws: WebSocket):
+    """WebSocket endpoint for real-time topology metric push.
+
+    Clients receive JSON messages with:
+        type: "topology_update"
+        topology: current DharmaTelemetry JSON
+        trend: trend analysis dict
+        alerts: list of new drift alerts (if any)
+    """
+    await _topology_ws.connect(ws)
+    try:
+        # Send initial state
+        pipeline = await sessions.get(None)
+        if pipeline._topology_history is not None:
+            latest = pipeline._topology_history.latest()
+            if latest is not None:
+                await ws.send_json(
+                    {
+                        "type": "topology_update",
+                        "topology": latest.to_json(),
+                        "trend": pipeline._topology_history.trend(),
+                        "alerts": [],
+                    }
+                )
+        # Keep alive — wait for disconnect
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        _topology_ws.disconnect(ws)
+
+
 @app.get("/api/status")
 async def status(session_id: str = ""):
     """Current system status."""
@@ -2067,7 +2323,8 @@ async def status(session_id: str = ""):
     # Use real codebase G_prec if available, fall back to heartbeat internal J
     if pipeline._gprec_matrix is not None and pipeline._gprec_matrix.shape[0] > 0:
         topo = pipeline.heartbeat.topology_snapshot(
-            adj=pipeline._gprec_matrix, node_labels=pipeline._gprec_labels,
+            adj=pipeline._gprec_matrix,
+            node_labels=pipeline._gprec_labels,
         )
     else:
         topo = hb.topology
@@ -2080,8 +2337,14 @@ async def status(session_id: str = ""):
             "total_strength": pipeline.memory.total_strength,
         },
         "reasoning_modes": [
-            "adaptive", "theoretical", "hyper", "active",
-            "alaya", "sleep", "embodied", "pineal",
+            "adaptive",
+            "theoretical",
+            "hyper",
+            "active",
+            "alaya",
+            "sleep",
+            "embodied",
+            "pineal",
         ],
         "active_sessions": sessions.active_sessions,
         "heartbeat": {
@@ -2112,6 +2375,7 @@ async def serve_frontend():
 
 if __name__ == "__main__":
     import uvicorn
+
     print("=" * 60)
     print("  Ālaya-Vijñāna v5.0 — 自動降臨サーバー")
     print("  推論モード統合 × Claude/Gemini 自動ルーティング")

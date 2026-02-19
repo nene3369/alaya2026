@@ -11,6 +11,7 @@ from lmm.dharma.topology_ast import (
     _compute_mtime_hash,
     _parse_imports,
     build_gprec_from_codebase,
+    compare_codebases,
     get_cached_gprec,
 )
 
@@ -234,3 +235,52 @@ class TestCache:
         h1 = _compute_mtime_hash(files)
         h2 = _compute_mtime_hash(files)
         assert h1 == h2
+
+
+# ===================================================================
+# Multi-codebase comparison
+# ===================================================================
+
+
+class TestCompareCodebases:
+    def test_compare_two_packages(self):
+        root1 = _create_temp_package(
+            {
+                "a.py": "from pkg.b import x\n",
+                "b.py": "x = 1\n",
+            }
+        )
+        root2 = _create_temp_package(
+            {
+                "c.py": "y = 1\n",
+            }
+        )
+        results = compare_codebases([root1, root2], package_prefix="pkg")
+        assert len(results) == 2
+        assert results[0]["n_modules"] > 0
+        assert 0.0 <= results[0]["overall_dharma"] <= 1.0
+        assert 0.0 <= results[1]["overall_dharma"] <= 1.0
+
+    def test_compare_empty_package(self):
+        tmpdir = tempfile.mkdtemp()
+        empty_root = Path(tmpdir) / "emptypkg"
+        empty_root.mkdir()
+        results = compare_codebases([empty_root], package_prefix="emptypkg")
+        assert len(results) == 1
+        assert results[0]["n_modules"] == 0
+        assert results[0]["overall_dharma"] == 1.0
+
+    def test_compare_result_fields(self):
+        root = _create_temp_package({"a.py": "x = 1\n"})
+        results = compare_codebases([root], package_prefix="pkg")
+        assert len(results) == 1
+        r = results[0]
+        assert "name" in r
+        assert "path" in r
+        assert "n_modules" in r
+        assert "n_edges" in r
+        assert "density" in r
+        assert "karma_isolation" in r
+        assert "gprec_topology" in r
+        assert "deleteability" in r
+        assert "overall_dharma" in r

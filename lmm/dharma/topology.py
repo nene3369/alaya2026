@@ -14,9 +14,14 @@ Output: DharmaTelemetry JSON with three pillar scores and ODE convergence data.
 from __future__ import annotations
 
 import collections
+import json
+import logging
 import time
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Sequence
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 from scipy import sparse
@@ -606,6 +611,167 @@ class TopologyHistory:
             "trend": self.trend(),
             "count": len(self._history),
         }
+
+    # --- Persistence ---
+
+    def save(self, path: str | Path) -> None:
+        """Save history to a JSON file."""
+        data = {
+            "version": 1,
+            "entries": [
+                {
+                    "timestamp": ts,
+                    "karma_isolation": t.karma_isolation,
+                    "gprec_topology": t.gprec_topology,
+                    "deleteability": t.deleteability,
+                    "overall_dharma": t.overall_dharma,
+                    "ode_steps": t.ode_steps,
+                    "ode_final_power": t.ode_final_power,
+                }
+                for ts, t in self._history
+            ],
+        }
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.replace(p)
+
+    def load(self, path: str | Path) -> int:
+        """Load history from a JSON file.  Returns number of entries loaded."""
+        p = Path(path)
+        if not p.exists():
+            return 0
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            entries = raw.get("entries", [])
+            for e in entries:
+                t = DharmaTelemetry(
+                    karma_isolation=e["karma_isolation"],
+                    gprec_topology=e["gprec_topology"],
+                    deleteability=e["deleteability"],
+                    overall_dharma=e["overall_dharma"],
+                    ode_steps=e.get("ode_steps", 0),
+                    ode_final_power=e.get("ode_final_power", 0.0),
+                    V_final=[],
+                )
+                self._history.append((e["timestamp"], t))
+            return len(entries)
+        except (json.JSONDecodeError, KeyError, TypeError):
+            logger.debug("Failed to load topology history from %s", path, exc_info=True)
+            return 0
+
+
+# ===================================================================
+# Topology Drift Detector — rapid-change alerts
+# ===================================================================
+
+
+@dataclass
+class TopologyAlert:
+    """Alert fired when a topology pillar changes rapidly."""
+
+    timestamp: float
+    pillar: str
+    previous_value: float
+    current_value: float
+    delta: float
+    severity: str  # "warning" | "critical"
+    message: str
+
+
+class TopologyDriftDetector:
+    """Detects sudden changes in topology pillar scores.
+
+    Fires alerts when the delta between consecutive evaluations exceeds
+    configurable thresholds.  Follows the DriftDetector z-score pattern
+    but operates on structured pillar scores rather than surprise scalars.
+
+    Parameters
+    ----------
+    warning_threshold : float
+        Absolute delta to trigger a warning alert.
+    critical_threshold : float
+        Absolute delta to trigger a critical alert.
+    cooldown : float
+        Minimum seconds between alerts for the same pillar.
+    """
+
+    PILLARS = ("karma_isolation", "gprec_topology", "deleteability", "overall_dharma")
+
+    def __init__(
+        self,
+        warning_threshold: float = 0.05,
+        critical_threshold: float = 0.15,
+        cooldown: float = 60.0,
+    ):
+        self.warning_threshold = warning_threshold
+        self.critical_threshold = critical_threshold
+        self.cooldown = cooldown
+        self._prev: dict[str, float] = {}
+        self._last_alert_time: dict[str, float] = {}
+        self._alerts: collections.deque[TopologyAlert] = collections.deque(maxlen=100)
+
+    def check(self, telemetry: DharmaTelemetry) -> list[TopologyAlert]:
+        """Check telemetry against previous values and return any new alerts."""
+        now = time.time()
+        new_alerts: list[TopologyAlert] = []
+        for pillar in self.PILLARS:
+            val = getattr(telemetry, pillar)
+            if pillar not in self._prev:
+                self._prev[pillar] = val
+                continue
+            delta = val - self._prev[pillar]
+            abs_delta = abs(delta)
+            self._prev[pillar] = val
+
+            if abs_delta < self.warning_threshold:
+                continue
+
+            # Check cooldown
+            if now - self._last_alert_time.get(pillar, 0) < self.cooldown:
+                continue
+
+            direction = "improved" if delta > 0 else "degraded"
+            if abs_delta >= self.critical_threshold:
+                severity = "critical"
+            else:
+                severity = "warning"
+
+            label = pillar.replace("_", " ").title()
+            alert = TopologyAlert(
+                timestamp=now,
+                pillar=pillar,
+                previous_value=self._prev[pillar] - delta,  # the value before update
+                current_value=val,
+                delta=delta,
+                severity=severity,
+                message=f"{label} {direction} by {abs_delta:.3f} ({severity})",
+            )
+            new_alerts.append(alert)
+            self._alerts.append(alert)
+            self._last_alert_time[pillar] = now
+
+        return new_alerts
+
+    @property
+    def recent_alerts(self) -> list[TopologyAlert]:
+        return list(self._alerts)
+
+    def to_json(self, last_n: int = 20) -> list[dict]:
+        items = list(self._alerts)[-last_n:]
+        return [
+            {
+                "timestamp": a.timestamp,
+                "pillar": a.pillar,
+                "previous_value": a.previous_value,
+                "current_value": a.current_value,
+                "delta": a.delta,
+                "severity": a.severity,
+                "message": a.message,
+            }
+            for a in items
+        ]
 
 
 # ===================================================================

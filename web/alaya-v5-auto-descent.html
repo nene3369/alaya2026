@@ -478,7 +478,7 @@
     const PILLAR_LABELS = ['Karma Isolation','G_prec Topology','Delete-ability'];
     const PILLAR_KEYS = ['karma_isolation','gprec_topology','deleteability'];
 
-    function TopologyPanel({topologyData, topologyHistory}) {
+    function TopologyPanel({topologyData, topologyHistory, alerts}) {
       const graphCanvasRef = useRef(null);
       const sparkCanvasRef = useRef(null);
 
@@ -491,6 +491,9 @@
       const history = topologyHistory || {};
       const snapshots = history.snapshots || [];
       const trend = history.trend || {};
+
+      // Alerts
+      const recentAlerts = (alerts || []).slice(-5);
 
       // Direction indicator
       const dirIcon = trend.direction === 'improving' ? '\u2191' :
@@ -681,6 +684,21 @@
           {current.pillar_details && current.pillar_details.nodes && Object.keys(current.pillar_details.nodes).length > 0 && (
             <canvas ref={graphCanvasRef} className="topology-canvas" width={320} height={200}
               style={{width:'100%',height:200,marginTop:6}} />
+          )}
+          {/* Drift alerts */}
+          {recentAlerts.length > 0 && (
+            <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:3}}>
+              {recentAlerts.map((a,i) => (
+                <div key={i} style={{
+                  fontSize:8, fontFamily:'var(--mono)', padding:'3px 6px', borderRadius:3,
+                  background: a.severity === 'critical' ? 'rgba(255,51,102,0.08)' : 'rgba(255,160,64,0.06)',
+                  border: `1px solid ${a.severity === 'critical' ? 'rgba(255,51,102,0.15)' : 'rgba(255,160,64,0.1)'}`,
+                  color: a.severity === 'critical' ? 'var(--loss)' : 'var(--fear)',
+                }}>
+                  {a.severity === 'critical' ? '\u26a0' : '\u25cb'} {a.message}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       );
@@ -1366,6 +1384,8 @@
       const [moon,setMoon]=useState(null);
       const [topologyData,setTopologyData]=useState(null);
       const [topologyHistory,setTopologyHistory]=useState(null);
+      const [topologyAlerts,setTopologyAlerts]=useState([]);
+      const [wsConnected,setWsConnected]=useState(false);
 
       // Fetch initial status from backend
       useEffect(()=>{
@@ -1377,11 +1397,52 @@
         }).catch(()=>{});
       },[]);
 
-      // Auto-fetch topology history
+      // WebSocket for real-time topology updates
       useEffect(()=>{
+        const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProto}//${window.location.host}/ws/dharma/topology`;
+        let ws;
+        let reconnectTimer;
+        const connect = () => {
+          try {
+            ws = new WebSocket(wsUrl);
+            ws.onopen = () => setWsConnected(true);
+            ws.onclose = () => {
+              setWsConnected(false);
+              reconnectTimer = setTimeout(connect, 5000);
+            };
+            ws.onerror = () => {};
+            ws.onmessage = (e) => {
+              try {
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'topology_update') {
+                  if (msg.topology) setTopologyData(msg.topology);
+                  if (msg.trend) setTopologyHistory(prev => ({
+                    ...(prev || {}), trend: msg.trend,
+                    snapshots: [...((prev||{}).snapshots||[]).slice(-49),
+                      {timestamp: Date.now()/1000, ...msg.topology}],
+                    count: ((prev||{}).count||0) + 1,
+                  }));
+                  if (msg.alerts && msg.alerts.length > 0) {
+                    setTopologyAlerts(prev => [...prev.slice(-20), ...msg.alerts]);
+                  }
+                }
+              } catch(err) {}
+            };
+          } catch(err) { reconnectTimer = setTimeout(connect, 5000); }
+        };
+        connect();
+        return () => { if(ws) ws.close(); clearTimeout(reconnectTimer); };
+      },[]);
+
+      // Fallback HTTP polling (when WebSocket not connected)
+      useEffect(()=>{
+        if (wsConnected) return;
         const fetchHistory=()=>{
           fetch(`${API_BASE}/api/dharma/topology/history?last_n=50`)
             .then(r=>r.json()).then(setTopologyHistory).catch(()=>{});
+          fetch(`${API_BASE}/api/dharma/topology/alerts?last_n=10`)
+            .then(r=>r.json()).then(setTopologyAlerts).catch(()=>{});
           fetch(`${API_BASE}/api/status`).then(r=>r.json()).then(data=>{
             if(data.heartbeat && data.heartbeat.topology) setTopologyData(data.heartbeat.topology);
           }).catch(()=>{});
@@ -1389,7 +1450,7 @@
         fetchHistory();
         const id=setInterval(fetchHistory,15000);
         return ()=>clearInterval(id);
-      },[]);
+      },[wsConnected]);
 
       const handleUpdate = useCallback((data) => {
         if(data.wave) setVesselWave(data.wave);
@@ -1483,8 +1544,9 @@
               <div className="card" style={{padding:16}}>
                 <h3 style={{fontSize:9,fontFamily:"var(--mono)",color:"var(--descent)",letterSpacing:3,marginBottom:12,opacity:0.35}}>
                   DHARMA TOPOLOGY
+                  {wsConnected && <span style={{fontSize:7,color:'var(--descent)',marginLeft:8,opacity:0.5}}>LIVE</span>}
                 </h3>
-                <TopologyPanel topologyData={topologyData} topologyHistory={topologyHistory} />
+                <TopologyPanel topologyData={topologyData} topologyHistory={topologyHistory} alerts={topologyAlerts} />
               </div>
             </div>
           )}

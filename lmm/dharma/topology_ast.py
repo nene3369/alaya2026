@@ -230,3 +230,69 @@ def get_cached_gprec(
     adj, labels = build_gprec_from_codebase(root_dir, **kwargs)
     _cache[key] = (current_hash, adj, labels)
     return adj, labels
+
+
+# ===================================================================
+# Multi-codebase comparison
+# ===================================================================
+
+
+def compare_codebases(
+    roots: list[str | Path],
+    **kwargs,
+) -> list[dict]:
+    """Evaluate multiple codebases and return comparative topology data.
+
+    Parameters
+    ----------
+    roots : list of package root paths
+    **kwargs : forwarded to :func:`build_gprec_from_codebase`
+
+    Returns
+    -------
+    list of dicts, each containing:
+        name, n_modules, n_edges, density, topology telemetry scores
+    """
+    from lmm.dharma.topology import TopologyEvaluator
+
+    evaluator = TopologyEvaluator(deleteability_method="degree")
+    results: list[dict] = []
+
+    for root_dir in roots:
+        root = Path(root_dir).resolve()
+        adj, labels = get_cached_gprec(root, **kwargs)
+        n = adj.shape[0]
+        if n == 0:
+            results.append(
+                {
+                    "name": root.name,
+                    "path": str(root),
+                    "n_modules": 0,
+                    "n_edges": 0,
+                    "density": 0.0,
+                    "karma_isolation": 1.0,
+                    "gprec_topology": 1.0,
+                    "deleteability": 1.0,
+                    "overall_dharma": 1.0,
+                }
+            )
+            continue
+
+        telemetry = evaluator.evaluate(adj, node_labels=labels, include_details=True)
+        max_edges = n * n - n
+        density = adj.nnz / max(max_edges, 1)
+        results.append(
+            {
+                "name": root.name,
+                "path": str(root),
+                "n_modules": n,
+                "n_edges": adj.nnz,
+                "density": density,
+                "karma_isolation": telemetry.karma_isolation,
+                "gprec_topology": telemetry.gprec_topology,
+                "deleteability": telemetry.deleteability,
+                "overall_dharma": telemetry.overall_dharma,
+            }
+        )
+
+    return results

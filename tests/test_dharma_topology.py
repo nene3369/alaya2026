@@ -10,6 +10,7 @@ from lmm.dharma.topology import (
     AnattaTerm,
     DharmaTelemetry,
     PratityaTerm,
+    TopologyDriftDetector,
     TopologyEvaluator,
     TopologyHistory,
     compute_deleteability,
@@ -504,3 +505,116 @@ class TestTopologyHistory:
         j = history.to_json(last_n=3)
         assert len(j["snapshots"]) == 3
         assert j["count"] == 10
+
+    def test_save_and_load(self):
+        import tempfile
+        from pathlib import Path
+
+        history = TopologyHistory(maxlen=100)
+        for i in range(5):
+            history.record(self._make_telemetry(0.5 + i * 0.05, 0.6, 0.7))
+
+        tmpfile = Path(tempfile.mkdtemp()) / "history.json"
+        history.save(tmpfile)
+        assert tmpfile.exists()
+
+        history2 = TopologyHistory(maxlen=100)
+        loaded = history2.load(tmpfile)
+        assert loaded == 5
+        assert history2.count == 5
+        latest = history2.latest()
+        assert latest is not None
+        assert abs(latest.karma_isolation - 0.7) < 0.01
+
+    def test_load_nonexistent(self):
+        history = TopologyHistory()
+        loaded = history.load("/tmp/nonexistent_file_xyz.json")
+        assert loaded == 0
+
+    def test_load_corrupt_file(self):
+        import tempfile
+        from pathlib import Path
+
+        tmpfile = Path(tempfile.mkdtemp()) / "bad.json"
+        tmpfile.write_text("not valid json{{{")
+        history = TopologyHistory()
+        loaded = history.load(tmpfile)
+        assert loaded == 0
+
+
+# ===================================================================
+# TopologyDriftDetector
+# ===================================================================
+
+
+class TestTopologyDriftDetector:
+    def _make_telemetry(self, karma=0.8, gprec=0.7, delete=0.9) -> DharmaTelemetry:
+        overall = (karma * gprec * delete) ** (1.0 / 3.0)
+        return DharmaTelemetry(
+            karma_isolation=karma,
+            gprec_topology=gprec,
+            deleteability=delete,
+            overall_dharma=overall,
+            ode_steps=10,
+            ode_final_power=0.001,
+            V_final=[0.1],
+        )
+
+    def test_no_alert_on_first_check(self):
+        detector = TopologyDriftDetector()
+        alerts = detector.check(self._make_telemetry())
+        assert alerts == []
+
+    def test_no_alert_on_small_change(self):
+        detector = TopologyDriftDetector(warning_threshold=0.05)
+        detector.check(self._make_telemetry(0.8, 0.7, 0.9))
+        alerts = detector.check(self._make_telemetry(0.81, 0.71, 0.91))
+        assert len(alerts) == 0
+
+    def test_warning_alert_on_moderate_change(self):
+        detector = TopologyDriftDetector(warning_threshold=0.05, cooldown=0)
+        detector.check(self._make_telemetry(0.8, 0.7, 0.9))
+        alerts = detector.check(self._make_telemetry(0.7, 0.7, 0.9))
+        # karma changed by 0.1, which > 0.05
+        assert any(a.pillar == "karma_isolation" for a in alerts)
+        assert any(a.severity == "warning" for a in alerts)
+
+    def test_critical_alert_on_large_change(self):
+        detector = TopologyDriftDetector(
+            warning_threshold=0.05,
+            critical_threshold=0.15,
+            cooldown=0,
+        )
+        detector.check(self._make_telemetry(0.8, 0.7, 0.9))
+        alerts = detector.check(self._make_telemetry(0.5, 0.7, 0.9))
+        critical = [a for a in alerts if a.severity == "critical"]
+        assert len(critical) > 0
+
+    def test_cooldown_suppresses_repeated_alerts(self):
+        detector = TopologyDriftDetector(
+            warning_threshold=0.05,
+            cooldown=9999,
+        )
+        detector.check(self._make_telemetry(0.8, 0.7, 0.9))
+        detector.check(self._make_telemetry(0.5, 0.7, 0.9))
+        # Second large change should be suppressed by cooldown
+        alerts = detector.check(self._make_telemetry(0.2, 0.7, 0.9))
+        karma_alerts = [a for a in alerts if a.pillar == "karma_isolation"]
+        assert len(karma_alerts) == 0
+
+    def test_recent_alerts_accumulate(self):
+        detector = TopologyDriftDetector(warning_threshold=0.05, cooldown=0)
+        detector.check(self._make_telemetry(0.8, 0.7, 0.9))
+        detector.check(self._make_telemetry(0.5, 0.7, 0.9))
+        assert len(detector.recent_alerts) > 0
+
+    def test_to_json(self):
+        detector = TopologyDriftDetector(warning_threshold=0.05, cooldown=0)
+        detector.check(self._make_telemetry(0.8, 0.7, 0.9))
+        detector.check(self._make_telemetry(0.5, 0.7, 0.9))
+        j = detector.to_json()
+        assert isinstance(j, list)
+        if j:
+            assert "pillar" in j[0]
+            assert "severity" in j[0]
+            assert "message" in j[0]
