@@ -13,7 +13,7 @@ expensive LLM generation for information retrieval.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import numpy as np
 
