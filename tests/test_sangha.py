@@ -234,13 +234,8 @@ class TestSanghaOrchestrator:
 
 from lmm.dharma.sangha import (
     DiscipleAgent,
-    Sariputra,
     Upali,
     Maudgalyayana,
-    Mahakasyapa,
-    Aniruddha,
-    Subhuti,
-    Purna,
 )
 from lmm.reasoning.pineal import PinealGland
 

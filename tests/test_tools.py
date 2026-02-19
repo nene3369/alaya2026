@@ -6,7 +6,6 @@ import asyncio
 from typing import Any, Dict
 
 from lmm.tools.base import (
-    Tool,
     ToolRegistry,
     ToolResult,
     ToolSandbox,

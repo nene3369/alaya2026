@@ -6,7 +6,6 @@ import asyncio
 
 from lmm.sangha.protocol import (
     MessageType,
-    PeerInfo,
     SanghaMessage,
     SanghaNode,
     SanghaNetwork,

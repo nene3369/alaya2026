@@ -8,7 +8,7 @@ all available hardware.
 from __future__ import annotations
 
 import os
-from typing import Any, List
+from typing import Any
 
 import numpy as np
 from scipy import sparse

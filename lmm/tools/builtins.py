@@ -7,9 +7,7 @@ Each tool satisfies the Tool protocol and can be registered in a ToolRegistry.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Dict

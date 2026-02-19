@@ -19,7 +19,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 import numpy as np
 
@@ -231,7 +231,7 @@ class SanghaNode:
     ) -> None:
         """Respond to a council deliberation request with our vote."""
         council_id = msg.payload.get("council_id", "")
-        query = msg.payload.get("query", "")
+        msg.payload.get("query", "")
 
         # Simple local deliberation — each node votes based on its specialty
         vote = {
