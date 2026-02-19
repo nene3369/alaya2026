@@ -10,7 +10,9 @@ from lmm.dharma.topology import (
     AnattaTerm,
     DharmaTelemetry,
     PratityaTerm,
+    TopologyDriftDetector,
     TopologyEvaluator,
+    TopologyHistory,
     compute_deleteability,
     compute_gprec_topology,
     compute_karma_isolation,
@@ -408,3 +410,211 @@ class TestEngineIntegration:
         engine.add(SilaTerm(k=4, weight=10.0))
         result = engine.synthesize_and_solve(k=4)
         assert len(result.selected_indices) == 4
+
+
+# ===================================================================
+# TopologyHistory
+# ===================================================================
+
+
+class TestTopologyHistory:
+    def _make_telemetry(self, karma=0.8, gprec=0.7, delete=0.9) -> DharmaTelemetry:
+        overall = (karma * gprec * delete) ** (1.0 / 3.0)
+        return DharmaTelemetry(
+            karma_isolation=karma,
+            gprec_topology=gprec,
+            deleteability=delete,
+            overall_dharma=overall,
+            ode_steps=10,
+            ode_final_power=0.001,
+            V_final=[0.1],
+        )
+
+    def test_record_and_latest(self):
+        history = TopologyHistory(maxlen=100)
+        t1 = self._make_telemetry(0.5, 0.5, 0.5)
+        history.record(t1)
+        assert history.latest() is t1
+        assert history.count == 1
+
+    def test_latest_empty(self):
+        history = TopologyHistory()
+        assert history.latest() is None
+
+    def test_maxlen_overflow(self):
+        history = TopologyHistory(maxlen=3)
+        for i in range(5):
+            history.record(self._make_telemetry(i / 10.0, 0.5, 0.5))
+        assert history.count == 3
+
+    def test_trend_stable_with_constant_values(self):
+        history = TopologyHistory(maxlen=100)
+        for _ in range(10):
+            history.record(self._make_telemetry(0.5, 0.5, 0.5))
+        trend = history.trend(window=10)
+        assert trend["direction"] == "stable"
+        assert abs(trend["karma_trend"]) < 0.01
+        assert trend["n_snapshots"] == 10
+
+    def test_trend_improving(self):
+        history = TopologyHistory(maxlen=100)
+        for i in range(10):
+            val = 0.3 + i * 0.05
+            history.record(self._make_telemetry(val, val, val))
+        trend = history.trend(window=10)
+        assert trend["direction"] == "improving"
+        assert trend["overall_trend"] > 0
+
+    def test_trend_degrading(self):
+        history = TopologyHistory(maxlen=100)
+        for i in range(10):
+            val = 0.8 - i * 0.05
+            history.record(self._make_telemetry(val, val, val))
+        trend = history.trend(window=10)
+        assert trend["direction"] == "degrading"
+        assert trend["overall_trend"] < 0
+
+    def test_trend_insufficient_data(self):
+        history = TopologyHistory()
+        history.record(self._make_telemetry())
+        trend = history.trend()
+        assert trend["direction"] == "stable"
+        assert trend["n_snapshots"] == 1
+
+    def test_to_json(self):
+        history = TopologyHistory(maxlen=100)
+        for _ in range(5):
+            history.record(self._make_telemetry(0.8, 0.7, 0.9))
+        j = history.to_json()
+        assert "snapshots" in j
+        assert "trend" in j
+        assert "count" in j
+        assert j["count"] == 5
+        assert len(j["snapshots"]) == 5
+        snap = j["snapshots"][0]
+        assert "timestamp" in snap
+        assert "karma_isolation" in snap
+        assert "gprec_topology" in snap
+        assert "deleteability" in snap
+        assert "overall_dharma" in snap
+
+    def test_to_json_last_n(self):
+        history = TopologyHistory(maxlen=100)
+        for _ in range(10):
+            history.record(self._make_telemetry())
+        j = history.to_json(last_n=3)
+        assert len(j["snapshots"]) == 3
+        assert j["count"] == 10
+
+    def test_save_and_load(self):
+        import tempfile
+        from pathlib import Path
+
+        history = TopologyHistory(maxlen=100)
+        for i in range(5):
+            history.record(self._make_telemetry(0.5 + i * 0.05, 0.6, 0.7))
+
+        tmpfile = Path(tempfile.mkdtemp()) / "history.json"
+        history.save(tmpfile)
+        assert tmpfile.exists()
+
+        history2 = TopologyHistory(maxlen=100)
+        loaded = history2.load(tmpfile)
+        assert loaded == 5
+        assert history2.count == 5
+        latest = history2.latest()
+        assert latest is not None
+        assert abs(latest.karma_isolation - 0.7) < 0.01
+
+    def test_load_nonexistent(self):
+        history = TopologyHistory()
+        loaded = history.load("/tmp/nonexistent_file_xyz.json")
+        assert loaded == 0
+
+    def test_load_corrupt_file(self):
+        import tempfile
+        from pathlib import Path
+
+        tmpfile = Path(tempfile.mkdtemp()) / "bad.json"
+        tmpfile.write_text("not valid json{{{")
+        history = TopologyHistory()
+        loaded = history.load(tmpfile)
+        assert loaded == 0
+
+
+# ===================================================================
+# TopologyDriftDetector
+# ===================================================================
+
+
+class TestTopologyDriftDetector:
+    def _make_telemetry(self, karma=0.8, gprec=0.7, delete=0.9) -> DharmaTelemetry:
+        overall = (karma * gprec * delete) ** (1.0 / 3.0)
+        return DharmaTelemetry(
+            karma_isolation=karma,
+            gprec_topology=gprec,
+            deleteability=delete,
+            overall_dharma=overall,
+            ode_steps=10,
+            ode_final_power=0.001,
+            V_final=[0.1],
+        )
+
+    def test_no_alert_on_first_check(self):
+        detector = TopologyDriftDetector()
+        alerts = detector.check(self._make_telemetry())
+        assert alerts == []
+
+    def test_no_alert_on_small_change(self):
+        detector = TopologyDriftDetector(warning_threshold=0.05)
+        detector.check(self._make_telemetry(0.8, 0.7, 0.9))
+        alerts = detector.check(self._make_telemetry(0.81, 0.71, 0.91))
+        assert len(alerts) == 0
+
+    def test_warning_alert_on_moderate_change(self):
+        detector = TopologyDriftDetector(warning_threshold=0.05, cooldown=0)
+        detector.check(self._make_telemetry(0.8, 0.7, 0.9))
+        alerts = detector.check(self._make_telemetry(0.7, 0.7, 0.9))
+        # karma changed by 0.1, which > 0.05
+        assert any(a.pillar == "karma_isolation" for a in alerts)
+        assert any(a.severity == "warning" for a in alerts)
+
+    def test_critical_alert_on_large_change(self):
+        detector = TopologyDriftDetector(
+            warning_threshold=0.05,
+            critical_threshold=0.15,
+            cooldown=0,
+        )
+        detector.check(self._make_telemetry(0.8, 0.7, 0.9))
+        alerts = detector.check(self._make_telemetry(0.5, 0.7, 0.9))
+        critical = [a for a in alerts if a.severity == "critical"]
+        assert len(critical) > 0
+
+    def test_cooldown_suppresses_repeated_alerts(self):
+        detector = TopologyDriftDetector(
+            warning_threshold=0.05,
+            cooldown=9999,
+        )
+        detector.check(self._make_telemetry(0.8, 0.7, 0.9))
+        detector.check(self._make_telemetry(0.5, 0.7, 0.9))
+        # Second large change should be suppressed by cooldown
+        alerts = detector.check(self._make_telemetry(0.2, 0.7, 0.9))
+        karma_alerts = [a for a in alerts if a.pillar == "karma_isolation"]
+        assert len(karma_alerts) == 0
+
+    def test_recent_alerts_accumulate(self):
+        detector = TopologyDriftDetector(warning_threshold=0.05, cooldown=0)
+        detector.check(self._make_telemetry(0.8, 0.7, 0.9))
+        detector.check(self._make_telemetry(0.5, 0.7, 0.9))
+        assert len(detector.recent_alerts) > 0
+
+    def test_to_json(self):
+        detector = TopologyDriftDetector(warning_threshold=0.05, cooldown=0)
+        detector.check(self._make_telemetry(0.8, 0.7, 0.9))
+        detector.check(self._make_telemetry(0.5, 0.7, 0.9))
+        j = detector.to_json()
+        assert isinstance(j, list)
+        if j:
+            assert "pillar" in j[0]
+            assert "severity" in j[0]
+            assert "message" in j[0]

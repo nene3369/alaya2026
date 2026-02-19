@@ -51,9 +51,7 @@ class TestHeartbeatTick:
         assert daemon.state.shape == (4,)
 
     def test_state_bounded_after_many_ticks(self):
-        daemon = HeartbeatDaemon(
-            n_dims=4, entropy_scale=1.0, deterministic=True
-        )
+        daemon = HeartbeatDaemon(n_dims=4, entropy_scale=1.0, deterministic=True)
         loop = asyncio.new_event_loop()
         try:
             for _ in range(100):
@@ -116,6 +114,7 @@ class TestSensoryInjection:
     def test_inject_sensory_resets_idle(self):
         daemon = HeartbeatDaemon(n_dims=4, deterministic=True)
         import time
+
         daemon._last_interaction_time = time.monotonic() - 1000
         daemon.inject_sensory(np.array([0.5, 0.5, 0.5, 0.5]))
         telemetry = daemon.snapshot()
@@ -141,6 +140,31 @@ class TestSnapshot:
         assert isinstance(snap, HeartbeatTelemetry)
         assert snap.tick_count == 0
         assert len(snap.v_state) == 4
+
+    def test_topology_snapshot_with_external_adj(self):
+        from scipy import sparse
+
+        daemon = HeartbeatDaemon(n_dims=4, deterministic=True)
+        # Create a small adjacency matrix
+        adj = sparse.csr_matrix(
+            ([0.5, 0.5], ([0, 1], [1, 0])),
+            shape=(3, 3),
+        )
+        result = daemon.topology_snapshot(
+            adj=adj,
+            node_labels=["A", "B", "C"],
+        )
+        assert result is not None
+        assert result["protocol"] == "dharma_topology_v1"
+        assert 0.0 <= result["karma_isolation"] <= 1.0
+        assert result["pillar_details"] is not None
+        assert "A" in result["pillar_details"]["nodes"]
+
+    def test_topology_snapshot_default(self):
+        daemon = HeartbeatDaemon(n_dims=4, deterministic=True)
+        result = daemon.topology_snapshot()
+        assert result is not None
+        assert result["protocol"] == "dharma_topology_v1"
 
 
 class TestLifecycle:
@@ -192,12 +216,15 @@ class TestIdleSleep:
         memory.store(np.array([0.0, 1.0, 0.0, 1.0]))
 
         sleep = SleepConsolidation(
-            memory, nrem_replay_cycles=2,
-            rem_noise_scale=0.05, pruning_threshold=0.1,
+            memory,
+            nrem_replay_cycles=2,
+            rem_noise_scale=0.05,
+            pruning_threshold=0.1,
         )
 
         daemon = HeartbeatDaemon(
-            n_dims=4, idle_sleep_threshold=0.0,  # trigger immediately
+            n_dims=4,
+            idle_sleep_threshold=0.0,  # trigger immediately
             deterministic=True,
         )
         daemon.attach_sleep(sleep)
@@ -220,7 +247,8 @@ class TestIdleSleep:
         sleep = SleepConsolidation(memory, nrem_replay_cycles=1)
 
         daemon = HeartbeatDaemon(
-            n_dims=4, idle_sleep_threshold=0.0,
+            n_dims=4,
+            idle_sleep_threshold=0.0,
             deterministic=True,
         )
         daemon.attach_sleep(sleep)
@@ -245,7 +273,8 @@ class TestIdleSleep:
         sleep = SleepConsolidation(memory)
 
         daemon = HeartbeatDaemon(
-            n_dims=4, idle_sleep_threshold=0.0,
+            n_dims=4,
+            idle_sleep_threshold=0.0,
             deterministic=True,
         )
         daemon.attach_sleep(sleep)

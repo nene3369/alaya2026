@@ -85,9 +85,7 @@ class HeartbeatDaemon:
         if n_dims < 1:
             raise ValueError(f"n_dims must be >= 1, got {n_dims}")
         if n_dims > 1024:
-            raise ValueError(
-                f"n_dims={n_dims} exceeds maximum 1024 for heartbeat daemon"
-            )
+            raise ValueError(f"n_dims={n_dims} exceeds maximum 1024 for heartbeat daemon")
         if dt <= 0:
             raise ValueError(f"dt must be positive, got {dt}")
         self.n_dims = n_dims
@@ -140,9 +138,7 @@ class HeartbeatDaemon:
         try:
             raw = os.urandom(n_bytes)
         except NotImplementedError:
-            raw = hashlib.sha256(
-                struct.pack("d", time.monotonic())
-            ).digest()[:n_bytes]
+            raw = hashlib.sha256(struct.pack("d", time.monotonic())).digest()[:n_bytes]
 
         values = []
         for b in raw:
@@ -160,7 +156,8 @@ class HeartbeatDaemon:
         """
         try:
             return await asyncio.wait_for(
-                self._tick_inner(), timeout=self.TICK_TIMEOUT,
+                self._tick_inner(),
+                timeout=self.TICK_TIMEOUT,
             )
         except (asyncio.TimeoutError, TimeoutError):
             # Tick timed out — return stale snapshot rather than blocking
@@ -228,9 +225,7 @@ class HeartbeatDaemon:
                 and self._sleep_consolidation is not None
             ):
                 try:
-                    report = await asyncio.to_thread(
-                        self._sleep_consolidation.consolidate
-                    )
+                    report = await asyncio.to_thread(self._sleep_consolidation.consolidate)
                     self._idle_consolidated = True
                     self._last_sleep_report = {
                         "n_consolidated": report.n_consolidated,
@@ -264,7 +259,8 @@ class HeartbeatDaemon:
                     report = self._watchdog.check_health(self._V)
                     if not report.healthy:
                         self._V = self._watchdog.execute_recovery(
-                            self._V, report,
+                            self._V,
+                            report,
                         )
             except asyncio.CancelledError:
                 break
@@ -335,20 +331,33 @@ class HeartbeatDaemon:
         """Access the health watchdog for external monitoring."""
         return self._watchdog
 
-    def topology_snapshot(self) -> dict | None:
+    def topology_snapshot(self, adj=None, node_labels=None) -> dict | None:
         """Compute topology telemetry from current heartbeat state.
 
-        Returns None if lmm.dharma.topology is not available (delete-ability).
+        Parameters
+        ----------
+        adj : sparse matrix, optional
+            External adjacency matrix to evaluate (e.g. from AST analysis).
+            Falls back to the internal J matrix if not provided.
+        node_labels : list[str], optional
+            Node labels for the adjacency matrix.
+
+        Returns None if lmm.dharma.topology is not available.
         """
         try:
             from lmm.dharma.topology import TopologyEvaluator
         except ImportError:
             return None
+        matrix = adj if adj is not None else self._J
         evaluator = TopologyEvaluator(
             tau_leak=self.r_leak,
             deleteability_method="degree",
         )
-        telemetry = evaluator.evaluate(self._J)
+        kwargs = {}
+        if node_labels is not None:
+            kwargs["node_labels"] = node_labels
+            kwargs["include_details"] = True
+        telemetry = evaluator.evaluate(matrix, **kwargs)
         return telemetry.to_json()
 
     def snapshot(self) -> HeartbeatTelemetry:
