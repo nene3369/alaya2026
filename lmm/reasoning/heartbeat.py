@@ -38,6 +38,7 @@ class HeartbeatTelemetry:
     idle_seconds: float
     cv: float
     last_sleep_report: dict | None = None
+    topology: dict | None = None
 
 
 class HeartbeatDaemon:
@@ -334,6 +335,22 @@ class HeartbeatDaemon:
         """Access the health watchdog for external monitoring."""
         return self._watchdog
 
+    def topology_snapshot(self) -> dict | None:
+        """Compute topology telemetry from current heartbeat state.
+
+        Returns None if lmm.dharma.topology is not available (delete-ability).
+        """
+        try:
+            from lmm.dharma.topology import TopologyEvaluator
+        except ImportError:
+            return None
+        evaluator = TopologyEvaluator(
+            tau_leak=self.r_leak,
+            deleteability_method="degree",
+        )
+        telemetry = evaluator.evaluate(self._J)
+        return telemetry.to_json()
+
     def snapshot(self) -> HeartbeatTelemetry:
         """Return a telemetry snapshot without ticking."""
         return HeartbeatTelemetry(
@@ -344,4 +361,5 @@ class HeartbeatDaemon:
             idle_seconds=time.monotonic() - self._last_interaction_time,
             cv=self.cv,
             last_sleep_report=self._last_sleep_report,
+            topology=self.topology_snapshot(),
         )

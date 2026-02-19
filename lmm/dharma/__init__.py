@@ -7,6 +7,14 @@ from lmm.dharma.patthana import Paccaya, PatthanaEngine
 from lmm.dharma.pratitya import Bija, PratityaRAG
 from lmm.dharma.sangha import CouncilResult, SanghaOrchestrator
 from lmm.dharma.vow import Vow, VowConstraintEngine
+from lmm.dharma.topology import (
+    AniccaTerm,
+    AnattaTerm,
+    DharmaTelemetry,
+    PratityaTerm,
+    TopologyEvaluator,
+    evaluate_engine_result,
+)
 
 __all__ = [
     "DharmaLMM",
@@ -24,4 +32,11 @@ __all__ = [
     "VowConstraintEngine",
     "SanghaOrchestrator",
     "CouncilResult",
+    # v6.0 — Dharma-Topology Protocol
+    "DharmaTelemetry",
+    "TopologyEvaluator",
+    "AniccaTerm",
+    "AnattaTerm",
+    "PratityaTerm",
+    "evaluate_engine_result",
 ]
