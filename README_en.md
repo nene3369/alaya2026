@@ -6,6 +6,12 @@
 
 > [日本語](README.md) | [中文](README_zh.md) | [한국어](README_ko.md) | [Español](README_es.md) | [हिन्दी](README_hi.md) | [Français](README_fr.md) | [বাংলা](README_bn.md) | [தமிழ்](README_ta.md) | [తెలుగు](README_te.md) | [मराठी](README_mr.md) | [‎اردو‎](README_ur.md) | [ગુજરાતી](README_gu.md) | [ಕನ್ನಡ](README_kn.md) | [മലയാളം](README_ml.md) | [ਪੰਜਾਬੀ](README_pa.md)
 
+> **Digital Dharma OS (Alaya V5)** — A consciousness-aware optimization platform
+> that fuses QUBO mathematics, Buddhist philosophy, and Free Energy Principle (FEP)
+> neuroscience into a living, self-evolving system. The server runs continuous
+> heartbeat dynamics, memory-driven context selection, and emotional wavelength
+> sensing — bridging the gap between discrete LLM calls and continuous cognition.
+
 **Select the top-K most informative items from n candidates by maximizing surprise × diversity via QUBO optimization.** No quantum computer needed — runs on classical solvers (SA, Ising SA, greedy).
 
 > **In one sentence:** Given n items with surprise scores, build a QUBO matrix encoding "pick K items that maximize total surprise while penalizing redundancy", then solve it with a classical optimizer. D-Wave not required.
@@ -124,6 +130,100 @@ lmm --demo --k 10 --method sa
 # From a NumPy file
 lmm --input data.npy --k 5 --method greedy
 ```
+
+---
+
+## Server Mode (Alaya V5)
+
+The Alaya-Vijñāna v5.0 server provides a web UI with real-time emotional
+wavelength visualization, 8-mode FEP reasoning, and Claude/Gemini auto-routing.
+
+### Prerequisites
+
+```bash
+pip install -e ".[server]"
+```
+
+### Start the server
+
+**PowerShell (Windows):**
+```powershell
+.\Start-DharmaServer.ps1
+```
+
+**Python (cross-platform):**
+```bash
+python -m uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+Then open: [http://localhost:8000](http://localhost:8000)
+
+### Stop the server
+
+**Windows (batch):**
+```batch
+.\stop-dharma-server.bat
+```
+
+**PowerShell:** Press `Ctrl+C` in the PowerShell window running `Start-DharmaServer.ps1`.
+
+**Linux/macOS:** Press `Ctrl+C` or run:
+```bash
+kill $(cat server.pid)
+```
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Web UI (Alaya V5 frontend) |
+| `/api/descent` | POST | Main reasoning pipeline |
+| `/api/descent/stream` | POST | Streaming SSE response |
+| `/api/dharma/auto` | POST | Auto-routed Dharma reasoning |
+| `/api/sense` | POST | Emotional wavelength analysis |
+| `/api/status` | GET | System status + heartbeat telemetry |
+
+---
+
+## Autonomous Features
+
+The server includes three autonomous subsystems that operate continuously
+between user interactions:
+
+### Heartbeat Daemon
+
+A continuous-time FEP state evolution loop that maintains a 4-dimensional
+state vector `[Love, Logic, Fear, Creation]`:
+
+- **Tick rate:** 100ms (active) → 5s (idle), adaptive slowdown
+- **Entropy injection:** Hardware entropy via `os.urandom()` at each tick
+- **Weight adaptation:** Karuna (compassion) and Metta (loving-kindness) weights auto-tune via Madhyamaka CV tracking (target CV = 0.5)
+- **Sleep consolidation:** Triggers NREM/REM memory replay after 60s idle
+
+### Context Bridge (Alaya Memory)
+
+Replaces naive history truncation (`history[-20:]`) with intelligent,
+memory-driven context selection:
+
+- Uses **Modern Hopfield Network** recall from AlayaMemory
+- Scores conversation history by cosine similarity to recalled patterns
+- Always includes the 3 most recent messages (recency bias)
+- Fills remaining budget (up to 20 messages) by relevance score
+
+### Semantic Emotions
+
+Real-time emotional wavelength analysis using keyword matching across
+four dimensions defined in `config/semantic_emotions.json`:
+
+| Dimension | Buddhist Concept | Signal |
+|-----------|-----------------|--------|
+| Love | Karuna (慈悲) | Compassion, warmth, gratitude |
+| Logic | Hetuvidya (因明) | Analysis, reasoning, proof |
+| Fear | Dukkha (苦) | Anxiety, doubt, suffering |
+| Creation | Sṛṣṭi (創造) | Innovation, imagination, art |
+
+Each keyword carries a weight (0.3–1.0). The resulting 4D vector
+drives reasoning mode selection and heartbeat state injection.
 
 ---
 

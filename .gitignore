@@ -25,3 +25,7 @@ credentials*.json
 /numpy/
 /scipy/
 /pytest/
+
+# Server runtime artifacts
+*.log
+*.pid
