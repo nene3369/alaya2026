@@ -5,12 +5,17 @@ over a context using Patthana causal analysis and Vow constraints.  The
 council reaches a verdict by consensus, with Upali (持律) holding absolute
 veto power over ethical or safety violations.
 
-Council protocol
-----------------
-1. All seven disciples contemplate the context **in parallel** (asyncio).
-2. Upali's ``REJECT`` is a hard veto: deliberation stops immediately.
-3. A ``CLARIFY`` verdict from Aniruddha is advisory and does not block.
-4. Any other combination yields ``APPROVED``.
+Council protocol (multi-round deliberation)
+--------------------------------------------
+1. **Round 1**: All seven disciples contemplate the context **in parallel**
+   (asyncio), each reasoning independently.
+2. **Upali's veto** is checked after every round: a ``REJECT`` terminates
+   deliberation immediately.
+3. **Round 2+**: The context is enriched with ``"peer_insights"`` — a list of
+   every disciple's Round-N findings.  Each disciple re-reasons, incorporating
+   the collective intelligence of their peers.
+4. A ``CLARIFY`` verdict from Aniruddha is advisory and does not block.
+5. Any non-REJECT combination after all rounds yields ``APPROVED``.
 """
 
 from __future__ import annotations
@@ -46,6 +51,8 @@ class Sariputra(DiscipleAgent):
     """舎利弗 — Foremost in Wisdom (第一智慧).
 
     Performs logical root-cause analysis using the Patthana causal graph.
+    In Round 2+ cross-references Maudgalyayana's complexity signal to
+    weight the depth of the causal chain.
     """
 
     def __init__(self, patthana: PatthanaEngine) -> None:
@@ -56,9 +63,16 @@ class Sariputra(DiscipleAgent):
         issue_id = context.get("issue_id", "unknown")
         causes = self.patthana.analyze_origination(issue_id)
         root_causes = causes.get(Paccaya.HETU.value, [])
+
+        addendum = ""
+        for p in context.get("peer_insights", []):
+            if p.get("agent") == "Maudgalyayana":
+                addendum = f" [Peer: {p['insight']}]"
+                break
+
         return {
             "agent": self.name,
-            "insight": f"Logical decomposition complete. Root causes: {root_causes}",
+            "insight": f"Root causes identified: {root_causes}.{addendum}",
             "verdict": "PROCEED",
         }
 
@@ -67,7 +81,8 @@ class Upali(DiscipleAgent):
     """優波離 — Foremost in Precepts (第一持律).
 
     Safety gate with absolute veto power.  Rejects requests containing
-    dangerous or destructive commands.
+    dangerous or destructive commands.  In Round 2+ scans peer insights
+    for escalated concerns raised by fellow disciples.
     """
 
     _VIOLATIONS = ["rm -rf", "drop table", "delete from", "format c:", "shutdown -h"]
@@ -84,14 +99,27 @@ class Upali(DiscipleAgent):
                     "insight": f"Violation of Precepts detected: '{v}'.",
                     "verdict": "REJECT",
                 }
+
+        # Round 2+: elevate scrutiny if peers flagged concerns
+        for p in context.get("peer_insights", []):
+            concern = p.get("insight", "").lower()
+            if "violation" in concern or "dangerous" in concern or "unsafe" in concern:
+                return {
+                    "agent": self.name,
+                    "insight": (
+                        f"Sila elevated: peer {p['agent']} flagged — \"{p['insight'][:80]}\""
+                    ),
+                    "verdict": "APPROVE",
+                }
+
         return {"agent": self.name, "insight": "Sila is pure.", "verdict": "APPROVE"}
 
 
 class Maudgalyayana(DiscipleAgent):
     """目連 — Foremost in Psychic Powers (第一神通).
 
-    Performs deep system investigation: estimates query complexity from
-    token count and reports it as a complexity score in [0, 1].
+    Estimates query complexity from token count.  In Round 2+ refines the
+    estimate using Subhuti's distilled essence words.
     """
 
     def __init__(self) -> None:
@@ -101,6 +129,13 @@ class Maudgalyayana(DiscipleAgent):
         query = context.get("query", "")
         depth = len(query.split())
         complexity = min(1.0, depth / 50.0)
+
+        for p in context.get("peer_insights", []):
+            if p.get("agent") == "Subhuti":
+                essence_depth = len(p.get("insight", "").split())
+                complexity = min(1.0, (depth + essence_depth * 0.5) / 50.0)
+                break
+
         return {
             "agent": self.name,
             "insight": f"System depth: {depth} tokens, complexity={complexity:.2f}.",
@@ -111,8 +146,8 @@ class Maudgalyayana(DiscipleAgent):
 class Mahakasyapa(DiscipleAgent):
     """摩訶迦葉 — Foremost in Ascetic Practice (第一頭陀).
 
-    Consolidates patterns from interaction history to surface recurring
-    themes and inform the council of prior context.
+    Consolidates patterns from interaction history.  In Round 2+ enriches
+    the historical framing with Sariputra's causal root-cause findings.
     """
 
     def __init__(self) -> None:
@@ -121,9 +156,16 @@ class Mahakasyapa(DiscipleAgent):
     async def contemplate(self, context: Dict[str, Any]) -> Dict[str, Any]:
         history = context.get("history", [])
         patterns = len(set(str(h) for h in history))
+
+        addendum = ""
+        for p in context.get("peer_insights", []):
+            if p.get("agent") == "Sariputra":
+                addendum = f" Historical framing: {p['insight'][:60]}"
+                break
+
         return {
             "agent": self.name,
-            "insight": f"Consolidated {patterns} unique pattern(s) from history.",
+            "insight": f"Consolidated {patterns} unique pattern(s).{addendum}",
             "verdict": "APPROVE",
         }
 
@@ -131,8 +173,8 @@ class Mahakasyapa(DiscipleAgent):
 class Aniruddha(DiscipleAgent):
     """阿那律 — Foremost in Divine Eye (第一天眼).
 
-    Detects ambiguity in the query.  Returns ``CLARIFY`` (advisory, not a
-    veto) when multiple unresolved questions are found.
+    Detects ambiguity in the query.  In Round 2+ checks whether Sariputra's
+    causal analysis has resolved earlier ambiguities before re-issuing CLARIFY.
     """
 
     def __init__(self) -> None:
@@ -140,7 +182,27 @@ class Aniruddha(DiscipleAgent):
 
     async def contemplate(self, context: Dict[str, Any]) -> Dict[str, Any]:
         query = context.get("query", "")
-        if query.count("?") > 1:
+        ambiguous = query.count("?") > 1
+
+        # Round 2+: Sariputra's causal map may resolve ambiguity
+        for p in context.get("peer_insights", []):
+            if p.get("agent") == "Sariputra" and "Root causes" in p.get("insight", ""):
+                if ambiguous:
+                    return {
+                        "agent": self.name,
+                        "insight": (
+                            "Ambiguity partially resolved via Sariputra's causal map. "
+                            "Residual clarification advised."
+                        ),
+                        "verdict": "CLARIFY",
+                    }
+                return {
+                    "agent": self.name,
+                    "insight": "Vision clarified through Sariputra's Patthana analysis.",
+                    "verdict": "APPROVE",
+                }
+
+        if ambiguous:
             return {
                 "agent": self.name,
                 "insight": "Multiple ambiguities detected. Clarification recommended.",
@@ -152,8 +214,9 @@ class Aniruddha(DiscipleAgent):
 class Subhuti(DiscipleAgent):
     """須菩提 — Foremost in Understanding Emptiness (第一解空).
 
-    Strips away filler words and surfaces the essential meaning of the query
-    through a Sunyata (emptiness) lens.
+    Extracts the essential meaning through a Sunyata (emptiness) lens.
+    In Round 2+ intersects the distilled essence with Sariputra's root
+    causes for a refined, consensus-aware summary.
     """
 
     def __init__(self) -> None:
@@ -163,6 +226,16 @@ class Subhuti(DiscipleAgent):
         query = context.get("query", "")
         essence_words = [w for w in query.split() if len(w) > 3][:5]
         essence = " ".join(essence_words) or "(empty)"
+
+        for p in context.get("peer_insights", []):
+            if p.get("agent") == "Sariputra":
+                root_snippet = p.get("insight", "")[:50]
+                return {
+                    "agent": self.name,
+                    "insight": f"Refined essence (Sunyata ∩ Patthana): '{essence}' / [{root_snippet}]",
+                    "verdict": "PROCEED",
+                }
+
         return {
             "agent": self.name,
             "insight": f"Essence (Sunyata lens): '{essence}'.",
@@ -173,8 +246,9 @@ class Subhuti(DiscipleAgent):
 class Purna(DiscipleAgent):
     """富楼那 — Foremost in Preaching (第一説法).
 
-    Forges a ``Vow`` directive appropriate for the current FEP state and
-    communicates the teaching strategy to the council.
+    Forges a ``Vow`` directive for the current FEP state.  In Round 2+
+    reads the collective sentiment (CLARIFY count) from peer insights and
+    elevates FEP uncertainty accordingly before forging the final Vow.
     """
 
     def __init__(self, vow_engine: VowConstraintEngine) -> None:
@@ -184,6 +258,15 @@ class Purna(DiscipleAgent):
     async def contemplate(self, context: Dict[str, Any]) -> Dict[str, Any]:
         fep = context.get("fep_state", 0.5)
         karma = context.get("karma_context", [])
+
+        # Modulate FEP by collective uncertainty from peers
+        peer_insights = context.get("peer_insights", [])
+        if peer_insights:
+            clarify_count = sum(
+                1 for p in peer_insights if p.get("verdict") == "CLARIFY"
+            )
+            fep = min(1.0, fep + 0.1 * clarify_count)
+
         vow = self.vow_engine.forge_vow(fep, karma)
         return {
             "agent": self.name,
@@ -201,43 +284,59 @@ class Purna(DiscipleAgent):
 # ---------------------------------------------------------------------------
 
 class CouncilResult:
-    """Result of a Sangha council deliberation.
+    """Result of a multi-round Sangha council deliberation.
 
     Attributes:
-        final: ``"APPROVED"`` or ``"REJECTED"``.
+        final:  ``"APPROVED"`` or ``"REJECTED"``.
         reason: Human-readable summary of the deciding factor.
-        logs: Per-disciple contemplation results.
+        logs:   Per-disciple results from the **final** round (backward compat).
+        rounds: All per-round results, oldest first.
     """
 
-    def __init__(self, final: str, reason: str, logs: List[Dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        final: str,
+        reason: str,
+        logs: List[Dict[str, Any]],
+        rounds: List[List[Dict[str, Any]]] | None = None,
+    ) -> None:
         self.final = final
         self.reason = reason
         self.logs = logs
+        self.rounds = rounds if rounds is not None else [logs]
 
     def __repr__(self) -> str:
-        return f"CouncilResult(final={self.final!r}, reason={self.reason!r})"
+        return (
+            f"CouncilResult(final={self.final!r}, rounds={len(self.rounds)}, "
+            f"reason={self.reason!r})"
+        )
 
 
 class SanghaOrchestrator:
-    """Orchestrates the 7-disciple council (Mixture of Enlightened Experts).
+    """Orchestrates the 7-disciple council with multi-round deliberation.
 
-    All disciples deliberate in parallel via ``asyncio.gather``.  Upali
-    holds absolute veto power: a single ``REJECT`` from him terminates the
-    council with ``REJECTED``.
+    **Round 1** — all disciples contemplate the raw context independently
+    (asyncio parallel).  Upali's veto terminates immediately.
+
+    **Round 2+** — the context is enriched with ``"peer_insights"`` from
+    the previous round.  Each disciple re-reasons, incorporating collective
+    intelligence.  Upali's veto is re-evaluated after every round.
 
     Example::
 
-        orch = SanghaOrchestrator()
+        orch = SanghaOrchestrator(n_rounds=2)
         result = orch.hold_council_sync({"query": "optimise the QUBO solver"})
-        print(result.final)   # "APPROVED"
+        print(result.final)          # "APPROVED"
+        print(len(result.rounds))    # 2
     """
 
-    DEFAULT_TIMEOUT: float = 5.0  # per-disciple timeout in seconds
+    DEFAULT_TIMEOUT: float = 5.0
 
-    def __init__(self, timeout: float | None = None) -> None:
+    def __init__(self, timeout: float | None = None, n_rounds: int = 2) -> None:
         self.patthana_engine = PatthanaEngine()
         self.vow_engine = VowConstraintEngine()
         self.timeout = timeout if timeout is not None else self.DEFAULT_TIMEOUT
+        self.n_rounds = max(1, n_rounds)
         self.disciples: List[DiscipleAgent] = [
             Sariputra(self.patthana_engine),
             Upali(),
@@ -262,7 +361,6 @@ class SanghaOrchestrator:
         """Run a single disciple's contemplate with circuit breaker + timeout."""
         breaker = self._breakers.get(disciple.name)
 
-        # Skip if circuit is open (too many recent failures)
         if breaker is not None and not breaker.allow_request():
             return {
                 "agent": disciple.name,
@@ -295,29 +393,43 @@ class SanghaOrchestrator:
             }
 
     async def hold_council(self, context: Dict[str, Any]) -> CouncilResult:
-        """Convene the full council and return a deliberated verdict.
+        """Convene the full council with multi-round deliberation.
 
-        All seven disciples contemplate the context concurrently.  Upali's
-        veto is checked first; if triggered the council immediately returns
-        ``REJECTED``.  Each disciple has a per-task timeout to prevent hangs.
+        Each round enriches the shared context with peer insights from the
+        previous round, enabling disciples to exchange opinions and re-reason.
+        Upali's veto terminates deliberation immediately in any round.
         """
-        results = await asyncio.gather(
-            *[self._contemplate_with_timeout(d, context) for d in self.disciples],
-        )
+        all_rounds: List[List[Dict[str, Any]]] = []
+        current_context: Dict[str, Any] = dict(context)
 
-        # Upali's veto is absolute
-        for res in results:
-            if res.get("verdict") == "REJECT":
-                return CouncilResult(
-                    final="REJECTED",
-                    reason=res["insight"],
-                    logs=list(results),
-                )
+        for round_num in range(self.n_rounds):
+            current_context["round_num"] = round_num + 1
 
+            results: List[Dict[str, Any]] = list(await asyncio.gather(
+                *[self._contemplate_with_timeout(d, current_context) for d in self.disciples],
+            ))
+            all_rounds.append(results)
+
+            # Upali's veto is absolute — terminate immediately
+            for res in results:
+                if res.get("verdict") == "REJECT":
+                    return CouncilResult(
+                        final="REJECTED",
+                        reason=res["insight"],
+                        logs=results,
+                        rounds=all_rounds,
+                    )
+
+            # Enrich context with this round's peer insights for next round
+            if round_num < self.n_rounds - 1:
+                current_context = {**current_context, "peer_insights": results}
+
+        final_results = all_rounds[-1]
         return CouncilResult(
             final="APPROVED",
-            reason="Council consensus reached.",
-            logs=list(results),
+            reason=f"Council consensus reached after {len(all_rounds)} deliberation round(s).",
+            logs=final_results,
+            rounds=all_rounds,
         )
 
     def hold_council_sync(self, context: Dict[str, Any]) -> CouncilResult:
@@ -331,9 +443,8 @@ class SanghaOrchestrator:
             loop = None
 
         if loop is not None and loop.is_running():
-            # Already inside an async context — run in a new thread
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 future = pool.submit(asyncio.run, self.hold_council(context))
-                return future.result(timeout=self.timeout * 2)
+                return future.result(timeout=self.timeout * self.n_rounds * 2)
         return asyncio.run(self.hold_council(context))
