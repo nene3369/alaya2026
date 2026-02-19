@@ -6,12 +6,22 @@ Pipeline: data → surprise → QUBO → classical solver → top-K indices.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
+from lmm._validation import (
+    validate_array_finite,
+    validate_k,
+    validate_nonneg,
+    warn_k_clamped,
+)
 from lmm.qubo import QUBOBuilder
 from lmm.solvers import ClassicalQUBOSolver
 from lmm.surprise import SurpriseCalculator
+
+SurpriseMethod = Literal["kl", "entropy", "bayesian"]
+SolverMethod = Literal["sa", "ising_sa", "greedy", "relaxation"]
 
 
 @dataclass
@@ -40,9 +50,13 @@ class LMM:
         alpha: float = 1.0,
         gamma: float = 10.0,
         beta: float = 0.0,
-        surprise_method: str = "entropy",
-        solver_method: str = "sa",
+        surprise_method: SurpriseMethod = "entropy",
+        solver_method: SolverMethod = "sa",
     ):
+        validate_k(k)
+        validate_nonneg(alpha, "alpha")
+        validate_nonneg(gamma, "gamma")
+        validate_nonneg(beta, "beta")
         self.k = k
         self.alpha = alpha
         self.gamma = gamma
@@ -64,8 +78,11 @@ class LMM:
         """Select K optimal items from candidates."""
         if len(candidates) == 0:
             raise ValueError("candidates must not be empty")
+        validate_array_finite(candidates, "candidates")
+        if similarity_matrix is not None:
+            validate_array_finite(similarity_matrix, "similarity_matrix")
         n = len(candidates)
-        k = min(self.k, n)
+        k = warn_k_clamped(self.k, n)
 
         surprises = self._calculator.compute(candidates)
 
@@ -91,8 +108,9 @@ class LMM:
         """Select from pre-computed surprise values."""
         if len(surprises) == 0:
             raise ValueError("surprises must not be empty")
+        validate_array_finite(surprises, "surprises")
         n = len(surprises)
-        k = min(self.k, n)
+        k = warn_k_clamped(self.k, n)
 
         builder = QUBOBuilder(n)
         builder.add_surprise_objective(surprises, alpha=self.alpha)

@@ -13,7 +13,9 @@ Submodular:
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 from scipy import sparse
@@ -21,6 +23,8 @@ from scipy.optimize import minimize
 
 from lmm._compat import HAS_ARGPARTITION, sparse_matvec, sparse_row_scatter
 from lmm.qubo import QUBOBuilder
+
+SolverMethod = Literal["sa", "ising_sa", "greedy", "relaxation"]
 
 
 # ===================================================================
@@ -34,7 +38,15 @@ class ClassicalQUBOSolver:
         self.qubo = qubo
         self.n = qubo.n
 
-    def solve(self, method: str = "sa", k: int | None = None, **kw) -> np.ndarray:
+    def solve(self, method: SolverMethod = "sa", k: int | None = None, **kw) -> np.ndarray:
+        method_clean = method.strip().lower()
+        if method_clean != method:
+            warnings.warn(
+                f"solver method {method!r} was normalized to {method_clean!r}; "
+                f"use the exact string to suppress this warning",
+                stacklevel=2,
+            )
+            method = method_clean  # type: ignore[assignment]
         if method == "sa":
             return self.solve_sa(k=k, **kw)
         if method == "ising_sa":
@@ -241,7 +253,7 @@ def solve_classical(
     k: int = 10,
     alpha: float = 1.0,
     gamma: float = 10.0,
-    method: str = "sa",
+    method: SolverMethod = "sa",
 ) -> np.ndarray:
     """One-shot: build QUBO from surprises and return selected indices."""
     n = len(surprises)
