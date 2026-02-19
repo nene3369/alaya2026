@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import os
-import pytest
 
 from lmm.providers.base import (
-    LLMProvider,
     LLMRequest,
-    LLMResponse,
     ProviderRegistry,
 )
 from lmm.providers.adapters import (

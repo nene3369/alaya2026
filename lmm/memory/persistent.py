@@ -9,12 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
-from scipy import sparse
 
-from lmm.reasoning.alaya import AlayaMemory, MemoryTrace
+from lmm.reasoning.alaya import AlayaMemory
 from lmm.memory.backend import (
     InMemoryBackend,
     MemoryBackend,
