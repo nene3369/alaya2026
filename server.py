@@ -1945,6 +1945,47 @@ async def sense(req: dict):
     return {"vessel": wave, "labels": DIMENSION_LABELS}
 
 
+@app.post("/api/dharma/topology")
+async def dharma_topology(req: dict):
+    """Evaluate a dependency graph through the Dharma-Topology three-pillar lens.
+
+    Accepts adjacency matrix as list-of-lists or sparse triplet format:
+      {"adjacency": [[0, 1, 0], [1, 0, 1], [0, 1, 0]]}
+    or:
+      {"rows": [0, 1, 1, 2], "cols": [1, 0, 2, 1], "data": [1, 1, 1, 1], "n": 3}
+    """
+    try:
+        from lmm.dharma.topology import TopologyEvaluator
+        from scipy import sparse as sp
+        import numpy as np_local
+
+        if "rows" in req and "cols" in req:
+            rows = req["rows"]
+            cols = req["cols"]
+            data = req.get("data", [1.0] * len(rows))
+            n = req.get("n", max(max(rows, default=0), max(cols, default=0)) + 1)
+            adj = sp.csr_matrix((data, (rows, cols)), shape=(n, n))
+        elif "adjacency" in req:
+            adj = sp.csr_matrix(np_local.array(req["adjacency"], dtype=float))
+        else:
+            return {"error": "Provide 'adjacency' (list-of-lists) or 'rows'/'cols'/'data'/'n' (triplet)."}
+
+        include_details = req.get("include_details", False)
+        node_labels = req.get("node_labels", None)
+        method = req.get("deleteability_method", "degree")
+
+        evaluator = TopologyEvaluator(deleteability_method=method)
+        telemetry = await asyncio.to_thread(
+            evaluator.evaluate, adj,
+            include_details=include_details, node_labels=node_labels,
+        )
+        return telemetry.to_json()
+    except ImportError:
+        return {"error": "lmm.dharma.topology not available"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/api/status")
 async def status(session_id: str = ""):
     """Current system status."""
@@ -1972,6 +2013,7 @@ async def status(session_id: str = ""):
             "idle_seconds": hb.idle_seconds,
             "cv": hb.cv,
             "last_sleep_report": hb.last_sleep_report,
+            "topology": hb.topology,
         },
     }
 
