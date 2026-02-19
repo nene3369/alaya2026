@@ -47,10 +47,10 @@ def main():
     result_dharma = dharma.select_dharma(candidates)
     time_dharma = time.perf_counter() - start
 
-    print(f"  指数勾配降下法: Lyapunov安定性保証")
-    print(f"  スパースグラフ: O(n^2) -> O(n*k) 高速化")
-    print(f"  超モジュラ貪欲法: Warm Start初期化")
-    print(f"  Ising形式SA: SIMD高速化")
+    print("  指数勾配降下法: Lyapunov安定性保証")
+    print("  スパースグラフ: O(n^2) -> O(n*k) 高速化")
+    print("  超モジュラ貪欲法: Warm Start初期化")
+    print("  Ising形式SA: SIMD高速化")
     print()
 
     # --- 従来版 (LMM) ---

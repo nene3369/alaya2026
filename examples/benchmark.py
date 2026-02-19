@@ -3,7 +3,9 @@
 numpy/scipy をインストールして以下を実行:
   PYTHONPATH=/home/user/LMM python run_benchmark.py
 """
-import sys, os, time
+import sys
+import os
+import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 import numpy as np
@@ -105,7 +107,7 @@ print(f"  Projection fix: Ising {int(x_ising.sum())} → {int(x_ising_proj.sum()
 # ============================================================
 # Benchmark 2: Sparse Graph Construction
 # ============================================================
-print(f"\n[2] Sparse Graph Construction")
+print("\n[2] Sparse Graph Construction")
 print("-" * 50)
 
 from lmm.dharma.algorithms import build_sparse_impact_graph
@@ -121,7 +123,7 @@ for n_test in [100, 500, 1000]:
 # ============================================================
 # Benchmark 3: Supermodular Greedy vs Plain Greedy
 # ============================================================
-print(f"\n[3] Supermodular Greedy vs Plain Greedy (n=200, k=15)")
+print("\n[3] Supermodular Greedy vs Plain Greedy (n=200, k=15)")
 print("-" * 50)
 
 from lmm.dharma.algorithms import vectorized_greedy_initialize
@@ -164,7 +166,7 @@ print(f"  Energy improvement: {improvement:+.1f}%")
 # ============================================================
 # Benchmark 4: Madhyamaka Balancer
 # ============================================================
-print(f"\n[4] Exponential vs Linear Balance (10 iterations)")
+print("\n[4] Exponential vs Linear Balance (10 iterations)")
 print("-" * 50)
 
 from lmm.dharma.algorithms import MadhyamakaBalancer
@@ -187,7 +189,7 @@ print(f"  Exponential: α={alpha_exp:.4f}  β={beta_exp:.4f}")
 # ============================================================
 # Benchmark 5: Submodular vs QUBO vs Random (n=200, k=15)
 # ============================================================
-print(f"\n[5] Submodular vs QUBO+SA vs Random (n=200, k=15)")
+print("\n[5] Submodular vs QUBO+SA vs Random (n=200, k=15)")
 print("-" * 50)
 
 from lmm.core import LMM
@@ -250,7 +252,7 @@ print(f"  Submodular vs Random obj:  {abs(r_sub.energy)/random_val:.1f}x better 
 # ============================================================  
 # Benchmark 6: Scale - Streaming Performance
 # ============================================================
-print(f"\n[6] Streaming Surprise (simulated 10M tokens)")
+print("\n[6] Streaming Surprise (simulated 10M tokens)")
 print("-" * 50)
 
 from lmm.scale.stream import StreamingSurprise
@@ -284,7 +286,7 @@ print(f"  Memory: ~{ss._histogram.max_bins * 16 / 1024:.0f}KB histogram + ~{sket
 # ============================================================
 # Benchmark 7: Sketch Data Structures
 # ============================================================
-print(f"\n[7] Count-Min Sketch & Streaming Histogram")
+print("\n[7] Count-Min Sketch & Streaming Histogram")
 print("-" * 50)
 
 from lmm.scale.sketch import CountMinSketch, StreamingHistogram

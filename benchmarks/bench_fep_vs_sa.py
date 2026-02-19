@@ -213,7 +213,7 @@ def run_benchmark():
 
         # 20ステップごとにサンプリング
         sample_interval = max(1, len(power_hist) // 25)
-        print(f"  step  │ log10(P_err)")
+        print("  step  │ log10(P_err)")
         print(f"  {'─'*5} │ {'─'*width}")
         for i in range(0, len(power_hist), sample_interval):
             lp = log_powers[i]
@@ -316,17 +316,17 @@ def run_benchmark():
     print("  総括")
     print("=" * 78)
 
-    print(f"\n  スケーリング:")
+    print("\n  スケーリング:")
     for n, k, nnz, e_fep, t_fep, e_sa, t_sa, ratio in scale_results:
         winner = "FEP" if ratio >= 0.99 else "SA"
         speed = "FEP" if t_fep < t_sa else "SA"
         print(f"    n={n:3d}: 品質={winner} (ratio={ratio:.3f}), 速度={speed} (FEP {t_fep:.0f}ms vs SA {t_sa:.0f}ms)")
 
-    print(f"\n  FEP の特性:")
+    print("\n  FEP の特性:")
     print(f"    - 決定的: std = {fep_std:.6f} (SA: {sa_std:.4f})")
-    print(f"    - 温度スケジュール不要")
-    print(f"    - 乱数不要")
-    print(f"    - 涅槃 (P_err < ε) による自動停止")
+    print("    - 温度スケジュール不要")
+    print("    - 乱数不要")
+    print("    - 涅槃 (P_err < ε) による自動停止")
     print("=" * 78)
 
 
