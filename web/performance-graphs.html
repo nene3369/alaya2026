@@ -127,6 +127,69 @@
       .chart-wrap-2col { grid-template-columns: 1fr; }
       .lean-block { font-size: 10px; }
     }
+
+    /* ── Footer ── */
+    footer.page-footer {
+      border-top: 1px solid var(--border);
+      padding: 56px 0 40px;
+    }
+    .footer-section-label {
+      font-family: var(--mono); font-size: 8px; letter-spacing: 3px;
+      text-transform: uppercase; color: var(--text-muted); margin-bottom: 16px;
+    }
+    .footer-block { margin-bottom: 44px; }
+    /* ① Philosophy */
+    .footer-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .philosophy-card {
+      padding: 14px 16px; border-radius: 6px;
+      background: rgba(255,255,255,0.01); line-height: 1.75;
+    }
+    .philosophy-card.c-descent { border-left: 2px solid #00ffc8; }
+    .philosophy-card.c-logic   { border-left: 2px solid #64d8ff; }
+    .philosophy-card.c-love    { border-left: 2px solid #ff6b9d; }
+    .philosophy-icon { font-size: 16px; margin-bottom: 8px; display: block; }
+    .philosophy-text { font-size: 12px; color: var(--text-secondary); }
+    /* ② Methodology */
+    .method-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .method-card {
+      background: rgba(255,255,255,0.01); border: 1px solid var(--border);
+      border-radius: 6px; padding: 14px 16px;
+    }
+    .method-badge {
+      font-family: var(--mono); font-size: 9px; letter-spacing: 0.5px;
+      padding: 2px 8px; border-radius: 3px; display: inline-block; margin-bottom: 8px;
+    }
+    .method-badge.mb-lean   { background: rgba(100,216,255,0.08); color: #64d8ff; border: 1px solid rgba(100,216,255,0.2); }
+    .method-badge.mb-grade  { background: rgba(0,255,200,0.08);   color: #00ffc8; border: 1px solid rgba(0,255,200,0.2); }
+    .method-badge.mb-prisma { background: rgba(192,132,252,0.08); color: #c084fc; border: 1px solid rgba(192,132,252,0.2); }
+    .method-desc { font-size: 10.5px; color: var(--text-muted); line-height: 1.65; margin-bottom: 8px; }
+    .method-applied { font-family: var(--mono); font-size: 9px; color: rgba(255,255,255,0.15); }
+    /* ③ Stats */
+    .stats-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+    .stat-cell { text-align: center; padding: 14px 8px; border-radius: 6px; background: rgba(255,255,255,0.01); border: 1px solid var(--border); }
+    .stat-num { font-family: var(--mono); font-size: 20px; font-weight: 400; color: var(--text-primary); display: block; line-height: 1.2; }
+    .stat-label { font-family: var(--mono); font-size: 7.5px; letter-spacing: 1px; color: var(--text-muted); text-transform: uppercase; display: block; margin-top: 5px; }
+    /* ④ Nav */
+    .footer-nav { display: flex; align-items: center; gap: 24px; margin-bottom: 44px; flex-wrap: wrap; }
+    .nav-link {
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.5px;
+      color: var(--text-muted); text-decoration: none;
+      border: 1px solid rgba(255,255,255,0.07); border-radius: 4px;
+      padding: 6px 14px; transition: border-color .15s, color .15s;
+    }
+    .nav-link:hover { color: rgba(255,255,255,0.55); border-color: rgba(255,255,255,0.15); }
+    /* ⑤ Sign-off */
+    .footer-signoff { text-align: center; padding-top: 32px; border-top: 1px solid rgba(255,255,255,0.03); }
+    .footer-dharma-quote {
+      font-family: var(--serif); font-size: 13px; letter-spacing: 4px; line-height: 2.2;
+      color: var(--text-muted); margin-bottom: 8px;
+    }
+    .footer-credits { font-family: var(--mono); font-size: 9px; color: rgba(255,255,255,0.05); }
+
+    @media (max-width: 600px) {
+      .footer-grid-3, .method-grid { grid-template-columns: 1fr; }
+      .stats-grid { grid-template-columns: repeat(3, 1fr); }
+    }
   </style>
 </head>
 <body>
@@ -400,6 +463,97 @@
       </div>
     </div>
   </section>
+
+  <!-- ══════════════════════════════════════════════
+       FOOTER — ムキムキの足回り
+  ══════════════════════════════════════════════ -->
+  <footer class="page-footer">
+
+    <!-- ① 魂の三言 -->
+    <div class="footer-block">
+      <p class="footer-section-label">Founding Philosophy</p>
+      <div class="footer-grid-3">
+        <div class="philosophy-card c-descent">
+          <span class="philosophy-icon" style="color:#00ffc8;">⬡</span>
+          <p class="philosophy-text">未知の技術を現実させる</p>
+        </div>
+        <div class="philosophy-card c-logic">
+          <span class="philosophy-icon" style="color:#64d8ff;">◈</span>
+          <p class="philosophy-text">理論、推理を厳格な学術論文とし、未来を切り開く</p>
+        </div>
+        <div class="philosophy-card c-love">
+          <span class="philosophy-icon" style="color:#ff6b9d;">❂</span>
+          <p class="philosophy-text">人類に慈悲を</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ② メソドロジー宣言 -->
+    <div class="footer-block">
+      <p class="footer-section-label">Academic Rigor Declaration</p>
+      <div class="method-grid">
+        <div class="method-card">
+          <span class="method-badge mb-lean">Lean 4</span>
+          <p class="method-desc">機械検査可能な形式的証明。型付き命題（Prop / Type）と戦術（tactic）による定理導出。</p>
+          <p class="method-applied">applied → Chart 1–5 (全定理)</p>
+        </div>
+        <div class="method-card">
+          <span class="method-badge mb-grade">GRADE</span>
+          <p class="method-desc">Grading of Recommendations, Assessment, Development and Evaluation。エビデンス品質を⊕4段階で評価、効果量・I²を明示。</p>
+          <p class="method-applied">applied → Chart 1 (⊕⊕⊕◯) · Chart 2–5 (⊕⊕⊕⊕)</p>
+        </div>
+        <div class="method-card">
+          <span class="method-badge mb-prisma">PRISMA</span>
+          <p class="method-desc">Preferred Reporting Items for Systematic Reviews and Meta-Analyses。計測源・再現手順・不均一性の透明な開示。</p>
+          <p class="method-applied">applied → 全チャートのメタ解析ブロック</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ③ システム統計 -->
+    <div class="footer-block">
+      <p class="footer-section-label">System Stats</p>
+      <div class="stats-grid">
+        <div class="stat-cell">
+          <span class="stat-num" style="color:#c084fc;">9,487</span>
+          <span class="stat-label">Total LOC</span>
+        </div>
+        <div class="stat-cell">
+          <span class="stat-num" style="color:#64d8ff;">31</span>
+          <span class="stat-label">Modules</span>
+        </div>
+        <div class="stat-cell">
+          <span class="stat-num" style="color:#00ffc8;">8</span>
+          <span class="stat-label">Reasoning Modes</span>
+        </div>
+        <div class="stat-cell">
+          <span class="stat-num" style="color:#ff6b9d;">8</span>
+          <span class="stat-label">Energy Terms</span>
+        </div>
+        <div class="stat-cell">
+          <span class="stat-num" style="color:#00ffc8;">8.25</span>
+          <span class="stat-label">Capability Avg</span>
+        </div>
+        <div class="stat-cell">
+          <span class="stat-num" style="color:#ffa040;">2.6×</span>
+          <span class="stat-label">Scale Speedup</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ④ ナビゲーション -->
+    <nav class="footer-nav">
+      <a class="nav-link" href="alaya-v5-auto-descent.html">← Ālaya-Vijñāna v5.0 Dashboard</a>
+      <a class="nav-link" href="alaya-v4-auto-descent.html">← v4 Archive</a>
+    </nav>
+
+    <!-- ⑤ クロージング -->
+    <div class="footer-signoff">
+      <p class="footer-dharma-quote">色即是空　空即是色</p>
+      <p class="footer-credits">Digital Dharma — Ālaya-Vijñāna v5.0 — QUBO × FEP × 仏教哲学 — CC0 2026</p>
+    </div>
+
+  </footer>
 
 </div><!-- /container -->
 
