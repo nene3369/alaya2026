@@ -11,6 +11,7 @@ from lmm.dharma.topology import (
     DharmaTelemetry,
     PratityaTerm,
     TopologyEvaluator,
+    TopologyHistory,
     compute_deleteability,
     compute_gprec_topology,
     compute_karma_isolation,
@@ -408,3 +409,98 @@ class TestEngineIntegration:
         engine.add(SilaTerm(k=4, weight=10.0))
         result = engine.synthesize_and_solve(k=4)
         assert len(result.selected_indices) == 4
+
+
+# ===================================================================
+# TopologyHistory
+# ===================================================================
+
+
+class TestTopologyHistory:
+    def _make_telemetry(self, karma=0.8, gprec=0.7, delete=0.9) -> DharmaTelemetry:
+        overall = (karma * gprec * delete) ** (1.0 / 3.0)
+        return DharmaTelemetry(
+            karma_isolation=karma,
+            gprec_topology=gprec,
+            deleteability=delete,
+            overall_dharma=overall,
+            ode_steps=10,
+            ode_final_power=0.001,
+            V_final=[0.1],
+        )
+
+    def test_record_and_latest(self):
+        history = TopologyHistory(maxlen=100)
+        t1 = self._make_telemetry(0.5, 0.5, 0.5)
+        history.record(t1)
+        assert history.latest() is t1
+        assert history.count == 1
+
+    def test_latest_empty(self):
+        history = TopologyHistory()
+        assert history.latest() is None
+
+    def test_maxlen_overflow(self):
+        history = TopologyHistory(maxlen=3)
+        for i in range(5):
+            history.record(self._make_telemetry(i / 10.0, 0.5, 0.5))
+        assert history.count == 3
+
+    def test_trend_stable_with_constant_values(self):
+        history = TopologyHistory(maxlen=100)
+        for _ in range(10):
+            history.record(self._make_telemetry(0.5, 0.5, 0.5))
+        trend = history.trend(window=10)
+        assert trend["direction"] == "stable"
+        assert abs(trend["karma_trend"]) < 0.01
+        assert trend["n_snapshots"] == 10
+
+    def test_trend_improving(self):
+        history = TopologyHistory(maxlen=100)
+        for i in range(10):
+            val = 0.3 + i * 0.05
+            history.record(self._make_telemetry(val, val, val))
+        trend = history.trend(window=10)
+        assert trend["direction"] == "improving"
+        assert trend["overall_trend"] > 0
+
+    def test_trend_degrading(self):
+        history = TopologyHistory(maxlen=100)
+        for i in range(10):
+            val = 0.8 - i * 0.05
+            history.record(self._make_telemetry(val, val, val))
+        trend = history.trend(window=10)
+        assert trend["direction"] == "degrading"
+        assert trend["overall_trend"] < 0
+
+    def test_trend_insufficient_data(self):
+        history = TopologyHistory()
+        history.record(self._make_telemetry())
+        trend = history.trend()
+        assert trend["direction"] == "stable"
+        assert trend["n_snapshots"] == 1
+
+    def test_to_json(self):
+        history = TopologyHistory(maxlen=100)
+        for _ in range(5):
+            history.record(self._make_telemetry(0.8, 0.7, 0.9))
+        j = history.to_json()
+        assert "snapshots" in j
+        assert "trend" in j
+        assert "count" in j
+        assert j["count"] == 5
+        assert len(j["snapshots"]) == 5
+        snap = j["snapshots"][0]
+        assert "timestamp" in snap
+        assert "karma_isolation" in snap
+        assert "gprec_topology" in snap
+        assert "deleteability" in snap
+        assert "overall_dharma" in snap
+
+    def test_to_json_last_n(self):
+        history = TopologyHistory(maxlen=100)
+        for _ in range(10):
+            history.record(self._make_telemetry())
+        j = history.to_json(last_n=3)
+        assert len(j["snapshots"]) == 3
+        assert j["count"] == 10

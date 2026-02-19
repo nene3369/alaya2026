@@ -14,6 +14,7 @@ Output: DharmaTelemetry JSON with three pillar scores and ODE convergence data.
 from __future__ import annotations
 
 import collections
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Sequence
 
@@ -482,6 +483,129 @@ class TopologyEvaluator:
             V_final=V_final_list,
             pillar_details=details,
         )
+
+
+# ===================================================================
+# Topology History — time-series tracking with trend analysis
+# ===================================================================
+
+
+class TopologyHistory:
+    """Sliding-window history of DharmaTelemetry snapshots.
+
+    Follows the deque pattern from DriftDetector: records timestamped
+    snapshots and computes moving-window trends for each pillar.
+
+    Parameters
+    ----------
+    maxlen : int
+        Maximum number of snapshots to retain.
+    """
+
+    def __init__(self, maxlen: int = 200):
+        self._history: collections.deque[tuple[float, DharmaTelemetry]] = collections.deque(
+            maxlen=maxlen
+        )
+
+    def record(self, telemetry: DharmaTelemetry) -> None:
+        """Record a new telemetry snapshot with current timestamp."""
+        self._history.append((time.time(), telemetry))
+
+    def latest(self) -> DharmaTelemetry | None:
+        """Return the most recent telemetry, or None if empty."""
+        if not self._history:
+            return None
+        return self._history[-1][1]
+
+    @property
+    def count(self) -> int:
+        return len(self._history)
+
+    def trend(self, window: int = 10) -> dict:
+        """Compute trend over the last *window* snapshots.
+
+        Returns a dict with per-pillar trend slopes and an overall
+        direction indicator: "improving", "stable", or "degrading".
+        """
+        if len(self._history) < 2:
+            return {
+                "karma_trend": 0.0,
+                "gprec_trend": 0.0,
+                "deleteability_trend": 0.0,
+                "overall_trend": 0.0,
+                "direction": "stable",
+                "n_snapshots": len(self._history),
+            }
+
+        recent = list(self._history)[-window:]
+        n = len(recent)
+
+        def _slope(values: list[float]) -> float:
+            if len(values) < 2:
+                return 0.0
+            x_mean = (len(values) - 1) / 2.0
+            y_mean = sum(values) / len(values)
+            num = sum((i - x_mean) * (v - y_mean) for i, v in enumerate(values))
+            den = sum((i - x_mean) ** 2 for i in range(len(values)))
+            if abs(den) < 1e-15:
+                return 0.0
+            return num / den
+
+        karma_vals = [t.karma_isolation for _, t in recent]
+        gprec_vals = [t.gprec_topology for _, t in recent]
+        del_vals = [t.deleteability for _, t in recent]
+        overall_vals = [t.overall_dharma for _, t in recent]
+
+        karma_trend = _slope(karma_vals)
+        gprec_trend = _slope(gprec_vals)
+        del_trend = _slope(del_vals)
+        overall_trend = _slope(overall_vals)
+
+        # Direction based on overall trend magnitude
+        if overall_trend > 0.005:
+            direction = "improving"
+        elif overall_trend < -0.005:
+            direction = "degrading"
+        else:
+            direction = "stable"
+
+        return {
+            "karma_trend": karma_trend,
+            "gprec_trend": gprec_trend,
+            "deleteability_trend": del_trend,
+            "overall_trend": overall_trend,
+            "direction": direction,
+            "n_snapshots": n,
+        }
+
+    def to_json(self, last_n: int | None = None) -> dict:
+        """Serialize history to JSON-compatible dict.
+
+        Parameters
+        ----------
+        last_n : int | None
+            If given, only include the last *last_n* snapshots.
+        """
+        items = list(self._history)
+        if last_n is not None:
+            items = items[-last_n:]
+
+        snapshots = [
+            {
+                "timestamp": ts,
+                "karma_isolation": t.karma_isolation,
+                "gprec_topology": t.gprec_topology,
+                "deleteability": t.deleteability,
+                "overall_dharma": t.overall_dharma,
+            }
+            for ts, t in items
+        ]
+
+        return {
+            "snapshots": snapshots,
+            "trend": self.trend(),
+            "count": len(self._history),
+        }
 
 
 # ===================================================================

@@ -53,6 +53,11 @@ try:
 except ImportError:
     raise SystemExit("httpx not installed. Run: pip install httpx") from None
 
+try:
+    from lmm.dharma.topology_ast import get_cached_gprec
+except ImportError:
+    get_cached_gprec = None
+
 
 # ===================================================================
 # Moon Phase (Meeus approximation) — ported from v4 HTML
@@ -1311,6 +1316,18 @@ class DescentPipeline:
         self.heartbeat.attach_sleep(self._sleep)
         self._heartbeat_task: asyncio.Task | None = None
 
+        # Topology auto-analysis: AST import graph + history tracking
+        self._topology_history = None
+        self._topology_task: asyncio.Task | None = None
+        self._gprec_matrix = None
+        self._gprec_labels: list[str] = []
+        try:
+            from lmm.dharma.topology import TopologyHistory
+            self._topology_history = TopologyHistory(maxlen=200)
+        except ImportError:
+            pass
+        self._init_gprec()
+
         # Alaya context bridge: memory-driven conversation history selection
         self.context_bridge = AlayaContextBridge(
             self.memory, max_context_messages=20, recency_count=3,
@@ -1320,6 +1337,24 @@ class DescentPipeline:
         self._adapter_cache: dict[str, tuple[dict, float]] = {}
         self._adapter_cache_max = 32
         self._adapter_cache_ttl = 120.0  # 2分TTL
+
+    def _init_gprec(self) -> None:
+        """Auto-scan codebase to build G_prec adjacency matrix."""
+        if get_cached_gprec is None:
+            return
+        try:
+            lmm_root = Path(__file__).resolve().parent / "lmm"
+            matrix, labels = get_cached_gprec(lmm_root)
+            self._gprec_matrix = matrix
+            self._gprec_labels = labels
+            # Record initial evaluation
+            if self._topology_history is not None and matrix.shape[0] > 0:
+                from lmm.dharma.topology import TopologyEvaluator
+                evaluator = TopologyEvaluator(deleteability_method="degree")
+                telemetry = evaluator.evaluate(matrix, node_labels=labels)
+                self._topology_history.record(telemetry)
+        except Exception:
+            pass  # Non-critical: topology is best-effort
 
     def _adapter_key(self, wave: list[float], mode: str) -> str:
         """Generate cache key from quantized wave + mode."""
@@ -1729,6 +1764,31 @@ app.add_middleware(
 SESSION_TTL = 300  # 5分未使用でクリーンアップ
 
 
+async def _topology_recorder(pipeline: DescentPipeline) -> None:
+    """Background coroutine: periodically re-evaluate topology and record history."""
+    while True:
+        await asyncio.sleep(30)
+        try:
+            if pipeline._gprec_matrix is None or pipeline._topology_history is None:
+                continue
+            if pipeline._gprec_matrix.shape[0] == 0:
+                continue
+            # Re-check cache (picks up file changes)
+            if get_cached_gprec is not None:
+                lmm_root = Path(__file__).resolve().parent / "lmm"
+                matrix, labels = get_cached_gprec(lmm_root)
+                pipeline._gprec_matrix = matrix
+                pipeline._gprec_labels = labels
+            from lmm.dharma.topology import TopologyEvaluator
+            evaluator = TopologyEvaluator(deleteability_method="degree")
+            telemetry = evaluator.evaluate(
+                pipeline._gprec_matrix, node_labels=pipeline._gprec_labels,
+            )
+            pipeline._topology_history.record(telemetry)
+        except Exception:
+            pass  # Non-critical background task
+
+
 class SessionManager:
     """セッション別にDescentPipelineを管理し、メモリ汚染を防止."""
 
@@ -1746,6 +1806,7 @@ class SessionManager:
             pipe = DescentPipeline()
             # Start heartbeat daemon for this session
             pipe._heartbeat_task = asyncio.create_task(pipe.heartbeat.run())
+            pipe._topology_task = asyncio.create_task(_topology_recorder(pipe))
             self._sessions[key] = (pipe, time.time())
             return pipe
 
@@ -1762,6 +1823,8 @@ class SessionManager:
                 pipe.heartbeat.stop()
                 if pipe._heartbeat_task is not None:
                     pipe._heartbeat_task.cancel()
+                if pipe._topology_task is not None:
+                    pipe._topology_task.cancel()
                 del self._sessions[sid]
 
     @property
@@ -1986,12 +2049,28 @@ async def dharma_topology(req: dict):
         return {"error": str(e)}
 
 
+@app.get("/api/dharma/topology/history")
+async def dharma_topology_history(session_id: str = "", last_n: int = 50):
+    """Return topology metric history with trend analysis."""
+    pipeline = await sessions.get(session_id or None)
+    if pipeline._topology_history is None:
+        return {"snapshots": [], "trend": {}, "count": 0}
+    return pipeline._topology_history.to_json(last_n=last_n)
+
+
 @app.get("/api/status")
 async def status(session_id: str = ""):
     """Current system status."""
     pipeline = await sessions.get(session_id or None)
     moon = compute_moon_phase()
     hb = pipeline.heartbeat.snapshot()
+    # Use real codebase G_prec if available, fall back to heartbeat internal J
+    if pipeline._gprec_matrix is not None and pipeline._gprec_matrix.shape[0] > 0:
+        topo = pipeline.heartbeat.topology_snapshot(
+            adj=pipeline._gprec_matrix, node_labels=pipeline._gprec_labels,
+        )
+    else:
+        topo = hb.topology
     return {
         "vessel": pipeline.vessel.exist(),
         "moon": asdict(moon),
@@ -2013,7 +2092,7 @@ async def status(session_id: str = ""):
             "idle_seconds": hb.idle_seconds,
             "cv": hb.cv,
             "last_sleep_report": hb.last_sleep_report,
-            "topology": hb.topology,
+            "topology": topo,
         },
     }
 

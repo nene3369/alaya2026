@@ -13,8 +13,10 @@ from lmm.dharma.topology import (
     DharmaTelemetry,
     PratityaTerm,
     TopologyEvaluator,
+    TopologyHistory,
     evaluate_engine_result,
 )
+from lmm.dharma.topology_ast import build_gprec_from_codebase, get_cached_gprec
 
 __all__ = [
     "DharmaLMM",
@@ -35,8 +37,11 @@ __all__ = [
     # v6.0 — Dharma-Topology Protocol
     "DharmaTelemetry",
     "TopologyEvaluator",
+    "TopologyHistory",
     "AniccaTerm",
     "AnattaTerm",
     "PratityaTerm",
     "evaluate_engine_result",
+    "build_gprec_from_codebase",
+    "get_cached_gprec",
 ]
