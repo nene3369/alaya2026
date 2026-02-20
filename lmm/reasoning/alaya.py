@@ -194,10 +194,13 @@ class AlayaMemory:
             return xi
 
         # Fallback: classical Hopfield if no explicit patterns stored
+        # NOTE: J is stored with NEGATIVE sign (record_and_learn uses -eta*xi*xj
+        # for QUBO co-selection), so we negate the field to recover attractor
+        # dynamics: x_{t+1} = sign(-J @ x) → attraction, not repulsion.
         J_csr = self._J.tocsr()
         for _ in range(n_steps):
             if J_csr.nnz > 0:
-                field = J_csr @ xi
+                field = -(J_csr @ xi)
             else:
                 field = np.zeros(self.n)
 
@@ -206,6 +209,54 @@ class AlayaMemory:
                     xi[i] = 1.0 if float(field[i]) > 0 else 0.0
 
         return xi
+
+    def search_by_text(self, text: str, limit: int = 5) -> list:
+        """テキストクエリで類似パターンを検索する。
+
+        文字列を各文字のLSBからバイナリcueベクトルに変換し、recall() を経由して
+        最近傍パターンを返す。パターン未登録の場合は空リストを返す。
+
+        Parameters
+        ----------
+        text : str
+            検索クエリ文字列。
+        limit : int
+            返す結果の最大件数。
+
+        Returns
+        -------
+        list of str
+            類似度順で上位 *limit* 件のパターン情報文字列。
+        """
+        if not self._patterns:
+            return []
+
+        # 文字コードの LSB でバイナリcueベクトルを構築
+        cue = np.zeros(self.n)
+        for i, ch in enumerate(text):
+            cue[i % self.n] += float(ord(ch) & 1)
+        if cue.max() > 0:
+            cue = cue / (cue.max() + 1e-12)
+
+        recalled = self.recall(cue)
+
+        # 全パターンとのコサイン類似度でランキング
+        results = []
+        for trace in self._patterns:
+            norm = (
+                np.linalg.norm(recalled) * np.linalg.norm(trace.pattern) + 1e-12
+            )
+            sim = float(np.dot(recalled, trace.pattern)) / float(norm)
+            results.append((sim, trace))
+
+        results.sort(key=lambda x: x[0], reverse=True)
+        return [
+            f"pattern(strength={t.strength:.3f}, accesses={t.access_count})"
+            for _, t in results[:limit]
+        ]
+
+    # sangha.py の hasattr(self.alaya, "search") および .search(text, limit=N) に対応
+    search = search_by_text
 
     def decay(self) -> None:
         """Apply temporal decay to all connections."""

@@ -1,0 +1,26 @@
+[package]
+name = "lmm_rust_core"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance Rust kernels for LMM: Ising SA and FEP KCL ODE solvers"
+license = "MIT"
+
+[lib]
+name = "lmm_rust_core"
+# cdylib = Python extension (.so / .pyd)
+crate-type = ["cdylib"]
+
+[dependencies]
+# PyO3: Python ↔ Rust bridge.  extension-module is mandatory for cdylib.
+pyo3  = { version = "0.22", features = ["extension-module"] }
+# rust-numpy: zero-copy NumPy array access (PyReadonlyArray1 / IntoPyArray)
+numpy = "0.22"
+# rand: SmallRng = xoshiro128++ — fastest quality RNG in the ecosystem
+rand  = { version = "0.8", features = ["small_rng"] }
+
+# ── Release profile: squeeze every cycle ──────────────────────────────────
+[profile.release]
+opt-level     = 3       # full optimisation
+lto           = "fat"   # cross-crate inlining (link-time optimisation)
+codegen-units = 1       # single CGU → better inlining opportunities
+panic         = "abort" # no unwinding overhead in extension code

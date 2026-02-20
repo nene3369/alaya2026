@@ -275,7 +275,13 @@ class SanghaNode:
             writer.write(msg.to_bytes())
             await writer.drain()
 
-            # Read response
+            # ANNOUNCE / PATTERN_SHARE / COUNCIL_VOTE は応答パケットを返さない。
+            # 応答を待つのは COUNCIL_REQUEST のみ。
+            if msg.msg_type != MessageType.COUNCIL_REQUEST.value:
+                writer.close()
+                return None
+
+            # Read response (COUNCIL_REQUEST のみここに到達)
             length_bytes = await asyncio.wait_for(
                 reader.readexactly(4), timeout=10.0,
             )

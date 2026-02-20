@@ -34,6 +34,9 @@ from lmm.reasoning.orchestrator import DharmaReasonerOrchestrator
 from lmm.reasoning.heartbeat import HeartbeatDaemon
 from lmm.reasoning.sleep import SleepConsolidation
 from lmm.reasoning.context_bridge import AlayaContextBridge
+from lmm.reasoning.hyper import HyperReasoner
+from lmm.reasoning.active import ActiveInferenceEngine
+from lmm.reasoning.embodiment import EmbodiedAgent
 
 # ---------------------------------------------------------------------------
 # FastAPI (lazy import for optional dependency)
@@ -396,16 +399,23 @@ class ReasoningEngine:
     """lmm ライブラリの推論アルゴリズムを直接実行するエンジン."""
 
     def __init__(self):
-        # 3つの主要推論モードを初期化
-        self.adaptive = AdaptiveReasoner(N_VARS, K_SELECT)
+        # 6つの BaseReasoner 派生推論モードを初期化
+        self.adaptive    = AdaptiveReasoner(N_VARS, K_SELECT)
         self.theoretical = TheoreticalReasoner(N_VARS, K_SELECT)
-        self.pineal = PinealGland(N_VARS, K_SELECT)
+        self.pineal      = PinealGland(N_VARS, K_SELECT)
+        self.hyper       = HyperReasoner(N_VARS, K_SELECT)
+        self.active      = ActiveInferenceEngine(N_VARS, K_SELECT)
+        self.embodied    = EmbodiedAgent(N_VARS, K_SELECT)
+        # SleepConsolidation は BaseReasoner ではなく (AlayaMemory) を受け取るため別扱い
+        self.sleep       = SleepConsolidation(AlayaMemory(N_VARS))
 
-        # オーケストレーターに登録
+        # オーケストレーターに6モードを登録
         self.orchestrator = DharmaReasonerOrchestrator()
-        self.orchestrator.register(self.adaptive)
-        self.orchestrator.register(self.theoretical)
-        self.orchestrator.register(self.pineal)
+        for r in (
+            self.adaptive, self.theoretical, self.pineal,
+            self.hyper, self.active, self.embodied,
+        ):
+            self.orchestrator.register(r)
 
         # FEP結果キャッシュ (直近16件のLRU)
         self._cache: dict[str, tuple[dict, float]] = {}
@@ -857,21 +867,34 @@ class AdaptiveThresholds:
         best_thresholds = list(self.thresholds)
 
         # Search over candidate boundaries (grid search)
+        # bin_centers は t1/t2/t3 による領域分割に使用する
+        bin_centers = np.linspace(self.min_bound, self.max_bound, n_bins)
         candidates = np.linspace(self.min_bound, self.max_bound, 15)
         for i, t1 in enumerate(candidates[:-2]):
             for j, t2 in enumerate(candidates[i + 1 : -1], i + 1):
                 for t3 in candidates[j + 1 :]:
-                    # Score: average convergence rate weighted by bin counts
-                    score = 0.0
-                    weight = 0.0
+                    # t1/t2/t3 でビンを4領域（adaptive/theoretical/hyper/sleep）に分割し、
+                    # 領域ごとの加重平均収束率の平均をスコアとする。
+                    # これにより、閾値の位置がスコアに実際に影響する。
+                    region_score  = np.zeros(4)
+                    region_weight = np.zeros(4)
                     for b in range(n_bins):
-                        # Each mode category should have good convergence
                         w = total_counts[b]
-                        score += w * rates[b]
-                        weight += w
+                        if w == 0:
+                            continue
+                        c = float(bin_centers[b])
+                        r = 0 if c < t1 else (1 if c < t2 else (2 if c < t3 else 3))
+                        region_score[r]  += w * rates[b]
+                        region_weight[r] += w
 
-                    if weight > 0:
-                        score /= weight
+                    # 領域ごとの平均収束率の平均（データのある領域のみ）
+                    populated = region_weight > 0
+                    if populated.any():
+                        score = float(
+                            np.mean(region_score[populated] / region_weight[populated])
+                        )
+                    else:
+                        score = 0.0
 
                     if score > best_score:
                         best_score = score

@@ -1171,9 +1171,10 @@
       const sendViaBackend=async(text,onToken)=>{
         const recentHistory=messages.slice(-20).map(m=>({role:m.role,content:m.content}));
         const resp=await fetch(`${API_BASE}/api/descent/stream`,{method:'POST',
-          headers:{'Content-Type':'application/json'},
+          headers:{'Content-Type':'application/json',
+            'x-claude-api-key':claudeKey,'x-gemini-api-key':geminiKey},
           body:JSON.stringify({message:text,history:recentHistory,
-            llm_preference:llmPref,claude_api_key:claudeKey,gemini_api_key:geminiKey})});
+            llm_preference:llmPref})});
         if(!resp.ok)throw new Error(`Server: ${resp.status}`);
         const reader=resp.body.getReader();
         const decoder=new TextDecoder();
