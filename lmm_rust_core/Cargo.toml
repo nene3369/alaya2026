@@ -17,6 +17,14 @@ pyo3  = { version = "0.22", features = ["extension-module"] }
 numpy = "0.22"
 # rand: SmallRng = xoshiro128++ — fastest quality RNG in the ecosystem
 rand  = { version = "0.8", features = ["small_rng"] }
+# rayon: data-parallel iterators for multi-threaded workloads
+rayon = "1.10"
+# crc32fast: SIMD-accelerated CRC32 for n-gram hashing
+crc32fast = "1.4"
+# ordered-float: Ord wrapper for f64 (BinaryHeap requires Ord)
+ordered-float = "4.2"
+# ndarray: N-dimensional array for 2D output conversion
+ndarray = "0.15"
 
 # ── Release profile: squeeze every cycle ──────────────────────────────────
 [profile.release]

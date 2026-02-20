@@ -1,11 +1,15 @@
 """lmm.rust_bridge — Rust-accelerated inner-loop bridge.
 
-Drop-in accelerator wrappers for the two hottest loops in LMM:
+Drop-in accelerator wrappers for the hottest loops in LMM:
 
-  * :func:`run_sa_ising_loop`   — Ising SA main loop
-  * :func:`run_fep_analog_loop` — FEP KCL ODE numerical integration
+  * :func:`run_sa_ising_loop`       — Ising SA main loop
+  * :func:`run_fep_analog_loop`     — FEP KCL ODE numerical integration
+  * :func:`run_submodular_greedy`   — Submodular lazy greedy (CELF)
+  * :func:`run_ngram_vectors`       — N-gram CRC32 hash vectorization
+  * :func:`run_bfs_components`      — BFS connected components
+  * :func:`run_bfs_reverse`         — BFS reverse traversal
 
-Both functions follow the same contract:
+All functions follow the same contract:
 
   * If ``lmm_rust_core`` is installed they delegate to the compiled Rust
     extension (zero-copy CSR arrays, SmallRng, LLVM-vectorised loops).
@@ -225,3 +229,93 @@ def run_fep_analog_loop(
         "lmm_rust_core is not installed and no _fallback was provided.\n"
         "Build it with:  cd lmm_rust_core && maturin develop --release"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  3.  Submodular Lazy Greedy wrapper
+# ═══════════════════════════════════════════════════════════════════════════
+
+def run_submodular_greedy(
+    surprises: np.ndarray,
+    csr: "csr_matrix",
+    k: int,
+    alpha: float,
+    beta: float,
+    *,
+    _fallback: Callable | None = None,
+):
+    """Run submodular lazy greedy (CELF), preferring Rust."""
+    if _HAS_RUST:
+        try:
+            csr_d, csr_i, csr_p = _csr_parts(csr)
+            sel, obj, gains = _rc.solve_submodular_greedy_rust(
+                np.asarray(surprises, dtype=np.float64),
+                csr_d, csr_i, csr_p,
+                int(k), float(alpha), float(beta),
+            )
+            return sel.astype(int), obj, gains
+        except Exception:
+            pass
+    if _fallback:
+        return _fallback()
+    raise ImportError("No rust core and no fallback.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  4.  N-gram Hash Vectorization wrapper
+# ═══════════════════════════════════════════════════════════════════════════
+
+def run_ngram_vectors(
+    texts: list[str],
+    max_features: int,
+    *,
+    _fallback: Callable | None = None,
+):
+    """Run n-gram CRC32 hash vectorization, preferring Rust."""
+    if _HAS_RUST:
+        try:
+            return _rc.ngram_vectors_rust(texts, max_features)
+        except Exception:
+            pass
+    return _fallback() if _fallback else None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  5.  BFS Connected Components wrapper
+# ═══════════════════════════════════════════════════════════════════════════
+
+def run_bfs_components(
+    n: int,
+    csr: "csr_matrix",
+    *,
+    _fallback: Callable | None = None,
+):
+    """Run BFS connected-component detection, preferring Rust."""
+    if _HAS_RUST:
+        try:
+            _, csr_i, csr_p = _csr_parts(csr)
+            return _rc.bfs_components_rust(n, csr_i, csr_p)
+        except Exception:
+            pass
+    return _fallback() if _fallback else None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  6.  BFS Reverse Traversal wrapper
+# ═══════════════════════════════════════════════════════════════════════════
+
+def run_bfs_reverse(
+    n: int,
+    start_indices: list[int],
+    csr_T: "csr_matrix",
+    *,
+    _fallback: Callable | None = None,
+):
+    """Run BFS reverse traversal on transposed graph, preferring Rust."""
+    if _HAS_RUST:
+        try:
+            _, csr_i, csr_p = _csr_parts(csr_T)
+            return _rc.bfs_reverse_rust(n, start_indices, csr_i, csr_p)
+        except Exception:
+            pass
+    return _fallback() if _fallback else None

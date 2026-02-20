@@ -25,6 +25,8 @@ from typing import Sequence
 import numpy as np
 from scipy import sparse
 
+from lmm.rust_bridge import run_bfs_reverse
+
 
 # ===================================================================
 # Internal helpers
@@ -419,26 +421,33 @@ class ChangeImpactAnalyzer:
         reachable : list of all reachable node indices (excluding start)
         max_depth : longest path found
         """
-        visited: set[int] = set(start_indices)
-        queue: collections.deque[tuple[int, int]] = collections.deque()
-        for idx in start_indices:
-            queue.append((idx, 0))
-        max_depth = 0
 
-        while queue:
-            node, depth = queue.popleft()
-            row = self._adj_T.getrow(node).tocoo()
-            for neighbor in row.col:
-                nb = int(neighbor)
-                if nb not in visited:
-                    visited.add(nb)
-                    new_depth = depth + 1
-                    if new_depth > max_depth:
-                        max_depth = new_depth
-                    queue.append((nb, new_depth))
+        def _fallback():
+            visited: set[int] = set(start_indices)
+            queue: collections.deque[tuple[int, int]] = collections.deque()
+            for idx in start_indices:
+                queue.append((idx, 0))
+            max_depth = 0
 
-        reachable = sorted(visited - set(start_indices))
-        return reachable, max_depth
+            while queue:
+                node, depth = queue.popleft()
+                row = self._adj_T.getrow(node).tocoo()
+                for neighbor in row.col:
+                    nb = int(neighbor)
+                    if nb not in visited:
+                        visited.add(nb)
+                        new_depth = depth + 1
+                        if new_depth > max_depth:
+                            max_depth = new_depth
+                        queue.append((nb, new_depth))
+
+            reachable = sorted(visited - set(start_indices))
+            return reachable, max_depth
+
+        result = run_bfs_reverse(
+            self._n, start_indices, self._adj_T, _fallback=_fallback,
+        )
+        return result if result is not None else _fallback()
 
     def analyze_change(self, module_name: str) -> ChangeImpactReport:
         """Analyze the impact of changing a single module.

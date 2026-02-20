@@ -11,6 +11,8 @@ from typing import Callable
 
 import numpy as np
 
+from lmm.rust_bridge import run_ngram_vectors
+
 
 # ---------------------------------------------------------------------------
 # Inline vectorization (was _vectorize.py)
@@ -18,32 +20,37 @@ import numpy as np
 
 def ngram_vectors(texts: list[str], max_features: int = 500) -> np.ndarray:
     """Character n-gram (3-5) hashing with deterministic CRC32."""
-    n = len(texts)
-    vectors = np.zeros((n, max_features), dtype=np.float64)
-    _crc32 = zlib.crc32
 
-    for i, text in enumerate(texts):
-        raw = text.lower().encode("utf-8")
-        mv = memoryview(raw)
-        text_len = len(mv)
+    def _fallback():
+        n = len(texts)
+        vectors = np.zeros((n, max_features), dtype=np.float64)
+        _crc32 = zlib.crc32
 
-        indices: list[int] = []
-        for ng in (3, 4, 5):
-            end = text_len - ng + 1
-            for j in range(end):
-                indices.append(_crc32(mv[j:j + ng]) % max_features)
+        for i, text in enumerate(texts):
+            raw = text.lower().encode("utf-8")
+            mv = memoryview(raw)
+            text_len = len(mv)
 
-        if indices:
-            buckets = [0] * max_features
-            for idx in indices:
-                buckets[idx] += 1
-            for k in range(max_features):
-                if buckets[k]:
-                    vectors[i, k] = float(buckets[k])
+            indices: list[int] = []
+            for ng in (3, 4, 5):
+                end = text_len - ng + 1
+                for j in range(end):
+                    indices.append(_crc32(mv[j:j + ng]) % max_features)
 
-    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-    norms = np.clip(norms, 1e-10, None)
-    return vectors / norms
+            if indices:
+                buckets = [0] * max_features
+                for idx in indices:
+                    buckets[idx] += 1
+                for k in range(max_features):
+                    if buckets[k]:
+                        vectors[i, k] = float(buckets[k])
+
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        norms = np.clip(norms, 1e-10, None)
+        return vectors / norms
+
+    result = run_ngram_vectors(texts, max_features, _fallback=_fallback)
+    return result if result is not None else _fallback()
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> np.ndarray:

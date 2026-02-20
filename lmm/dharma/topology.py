@@ -33,6 +33,7 @@ from lmm.dharma.energy import (
     _resize_sparse,
 )
 from lmm.dharma.fep import solve_fep_kcl_analog
+from lmm.rust_bridge import run_bfs_components
 
 
 def _remove_diagonal(m: sparse.csr_matrix) -> sparse.csr_matrix:
@@ -106,27 +107,32 @@ class DharmaTelemetry:
 def _bfs_components(adj: sparse.csr_matrix) -> list[list[int]]:
     """Find connected components via BFS (shim-compatible, no eigsh)."""
     n = adj.shape[0]
-    visited = [False] * n
-    components: list[list[int]] = []
     # Build symmetric adjacency for undirected component search
     sym = adj + adj.T
-    for start in range(n):
-        if visited[start]:
-            continue
-        comp: list[int] = []
-        queue = collections.deque([start])
-        visited[start] = True
-        while queue:
-            node = queue.popleft()
-            comp.append(node)
-            row = sym.getrow(node).tocoo()
-            for neighbor in row.col:
-                nb = int(neighbor)
-                if not visited[nb]:
-                    visited[nb] = True
-                    queue.append(nb)
-        components.append(comp)
-    return components
+
+    def _fallback():
+        visited = [False] * n
+        components: list[list[int]] = []
+        for start in range(n):
+            if visited[start]:
+                continue
+            comp: list[int] = []
+            queue = collections.deque([start])
+            visited[start] = True
+            while queue:
+                node = queue.popleft()
+                comp.append(node)
+                row = sym.getrow(node).tocoo()
+                for neighbor in row.col:
+                    nb = int(neighbor)
+                    if not visited[nb]:
+                        visited[nb] = True
+                        queue.append(nb)
+            components.append(comp)
+        return components
+
+    result = run_bfs_components(n, sym, _fallback=_fallback)
+    return result if result is not None else _fallback()
 
 
 def compute_karma_isolation(
