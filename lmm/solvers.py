@@ -87,7 +87,7 @@ class ClassicalQUBOSolver:
         for _ in range(max_steps):
             marginal = diag + 2.0 * Jx
             if gamma > 0:
-                marginal = marginal + gamma * (2.0 * sx + 1.0 - 2.0 * x)
+                marginal = marginal + 2.0 * gamma * sx
             marginal = np.where(x < 0.5, marginal, np.inf)
             best = int(np.argmin(marginal))
             if marginal[best] >= 0.0:
@@ -209,7 +209,7 @@ class ClassicalQUBOSolver:
 
         best_s = run_sa_ising_loop(
             n, n_iterations, temp_start, temp_end, gamma,
-            diag, s, local_field, energy, csr,
+            s, local_field, energy, csr,
             _fallback=_python_sa_loop,
         )
 
@@ -240,8 +240,6 @@ class ClassicalQUBOSolver:
             if n_sel > k:
                 sel = np.where(x > 0.5)[0]
                 mc = -diag[sel] + 2.0 * Qx[sel]
-                if gamma > 0:
-                    mc = mc - gamma
                 drop = int(sel[int(np.argmax(mc))])
                 x[drop] = 0.0
                 if has_offdiag:
@@ -251,8 +249,6 @@ class ClassicalQUBOSolver:
                 if len(unsel) == 0:
                     break
                 delta = diag[unsel] + 2.0 * Qx[unsel]
-                if gamma > 0:
-                    delta = delta + gamma
                 add = int(unsel[int(np.argmin(delta))])
                 x[add] = 1.0
                 if has_offdiag:

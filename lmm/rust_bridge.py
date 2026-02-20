@@ -84,9 +84,9 @@ def _csr_parts(
             np.zeros(n + 1, dtype=np.int32),
         )
     return (
-        np.array(csr.data,    dtype=np.float64),
-        np.array(csr.indices, dtype=np.int32),
-        np.array(csr.indptr,  dtype=np.int32),
+        np.ascontiguousarray(csr.data,    dtype=np.float64),
+        np.ascontiguousarray(csr.indices, dtype=np.int32),
+        np.ascontiguousarray(csr.indptr,  dtype=np.int32),
     )
 
 
@@ -100,7 +100,6 @@ def run_sa_ising_loop(
     temp_start: float,
     temp_end: float,
     gamma: float,
-    diag: np.ndarray,
     s: np.ndarray,
     local_field: np.ndarray,
     energy: float,
@@ -121,7 +120,6 @@ def run_sa_ising_loop(
     temp_start   : initial temperature
     temp_end     : final temperature
     gamma        : cardinality-constraint penalty weight
-    diag         : (n,) QUBO diagonal
     s            : (n,) initial Ising spins (±1)
     local_field  : (n,) precomputed local field  h + 2·J·s
     energy       : scalar initial energy
@@ -142,7 +140,6 @@ def run_sa_ising_loop(
                 float(temp_start),
                 float(temp_end),
                 float(gamma),
-                np.asarray(diag,        dtype=np.float64),
                 np.asarray(s,           dtype=np.float64),
                 np.asarray(local_field, dtype=np.float64),
                 float(energy),
