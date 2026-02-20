@@ -481,6 +481,6 @@ class SanghaOrchestrator:
         if loop is not None and loop.is_running():
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(asyncio.run, self.hold_council(context))
+                future = pool.submit(lambda: asyncio.run(self.hold_council(context)))
                 return future.result(timeout=self.timeout * self.n_rounds * 2)
         return asyncio.run(self.hold_council(context))

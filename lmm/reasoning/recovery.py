@@ -284,11 +284,13 @@ class AgentWatchdog:
         action = report.recovery_action
 
         if action == "reset_state":
+            self._recent_energies.clear()  # 停滞履歴をリセット（無限リカバリループ防止）
             return np.zeros(state.shape)
 
         if action == "perturb_state":
             # Add small noise to escape stagnation
             noise = np.random.default_rng().normal(0, 0.01, size=state.shape)
+            self._recent_energies.clear()  # 停滞履歴をリセット（無限リカバリループ防止）
             return np.clip(
                 state + noise,
                 self.value_bounds[0],
@@ -296,6 +298,7 @@ class AgentWatchdog:
             )
 
         # Default: reset
+        self._recent_energies.clear()  # 停滞履歴をリセット（無限リカバリループ防止）
         return np.zeros(state.shape)
 
     @property

@@ -328,7 +328,7 @@ class DharmaReasonerOrchestrator:
             adaptive_result = self._reason_with_timeout(
                 "adaptive", h, J, sila_gamma=sila_gamma, **kwargs,
             )
-            if adaptive_result is not None and adaptive_result.energy <= result.energy * 1.1:
+            if adaptive_result is not None and adaptive_result.energy <= result.energy + abs(result.energy) * 0.1:
                 result = adaptive_result
                 status = "adaptive"
 
