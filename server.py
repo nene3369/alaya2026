@@ -1620,12 +1620,8 @@ class DescentPipeline:
         api_key: str,
     ) -> dict:
         """Call LLM to forge adapter persona. No caching — caller handles cache."""
-        forge_call = (
-            call_gemini
-            if api_keys.get("gemini")
-            else (call_claude if llm_target == "claude" else call_gemini)
-        )
-        forge_key = api_keys.get("gemini", api_key)
+        forge_call = call_claude if llm_target == "claude" else call_gemini
+        forge_key = api_key
         meta = build_meta_prompt(wave, moon, mode, complexity, history)
         try:
             raw = await forge_call(
@@ -1937,9 +1933,9 @@ async def _topology_singleton() -> None:
         from lmm.dharma.topology import TopologyDriftDetector, TopologyHistory
         history = TopologyHistory(maxlen=200)
         drift = TopologyDriftDetector(
-            window=10, z_threshold=2.5, min_delta=0.05,
+            warning_threshold=0.05, critical_threshold=0.15, cooldown=60.0,
         )
-        history_path = Path(__file__).resolve().parent / "topology_history.json"
+        history_path = Path(__file__).resolve().parent / ".dharma" / "topology_history.json"
         history.load(history_path)
     except Exception:
         pass
@@ -1957,7 +1953,7 @@ async def _topology_singleton() -> None:
 
             from lmm.dharma.topology import TopologyEvaluator
             evaluator = TopologyEvaluator(deleteability_method="degree")
-            telemetry = evaluator.evaluate(matrix, node_labels=labels)
+            telemetry = evaluator.evaluate(matrix, node_labels=labels, include_details=True)
 
             if history is not None:
                 history.record(telemetry)

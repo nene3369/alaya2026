@@ -168,7 +168,7 @@ class DharmaReasonerOrchestrator:
         # abs_h を [0,1) に正規化してタイブレーク専用にする。
         # votes は整数なので abs_h_norm < 1 との衝突がなく、票数が常に支配する。
         abs_h = np.array([abs(float(x)) for x in h])
-        abs_h_norm = (abs_h - abs_h.min()) / (abs_h.max() - abs_h.min() + 1e-12)
+        abs_h_norm = 0.99 * (abs_h - abs_h.min()) / (abs_h.max() - abs_h.min() + 1e-12)
         combined = votes + abs_h_norm
         ensemble_indices = np.argsort(-combined)[:k]
         ensemble_indices = np.array(sorted(int(i) for i in ensemble_indices))

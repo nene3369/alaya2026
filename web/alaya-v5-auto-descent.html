@@ -1153,17 +1153,6 @@
       // バックエンド自動検出
       useEffect(()=>{fetch(`${API_BASE}/api/status`).then(r=>r.ok?setBackendAvailable(true):setBackendAvailable(false)).catch(()=>setBackendAvailable(false));},[]);
 
-      // タイピング中のプリフェッチ (デバウンス500ms — バックエンドのみ)
-      useEffect(()=>{
-        if(!input.trim()||!backendAvailable)return;
-        clearTimeout(prefetchTimer.current);
-        prefetchTimer.current=setTimeout(()=>{
-          fetch(`${API_BASE}/api/sense`,{method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({message:input.trim()})}).catch(()=>{});
-        },500);
-        return()=>clearTimeout(prefetchTimer.current);
-      },[input,backendAvailable]);
 
       const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
