@@ -60,7 +60,7 @@ use ordered_float::OrderedFloat;
 #[pyfunction]
 #[pyo3(signature = (
     n, n_iterations, temp_start, temp_end, gamma,
-    diag, s_in, local_field_in, energy_init,
+    s_in, local_field_in, energy_init,
     csr_data, csr_indices, csr_indptr
 ))]
 fn solve_sa_ising_rust<'py>(
@@ -70,7 +70,6 @@ fn solve_sa_ising_rust<'py>(
     temp_start: f64,
     temp_end: f64,
     gamma: f64,
-    diag: PyReadonlyArray1<'py, f64>,
     s_in: PyReadonlyArray1<'py, f64>,
     local_field_in: PyReadonlyArray1<'py, f64>,
     energy_init: f64,
@@ -78,19 +77,18 @@ fn solve_sa_ising_rust<'py>(
     csr_indices: PyReadonlyArray1<'py, i32>,
     csr_indptr: PyReadonlyArray1<'py, i32>,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-    // ── Extract slices and validate dimensions (Fix 3: boundary checks) ─────
-    let diag_sl  = diag.as_slice()?;
+    // Early return for empty problem — avoids gen_range(0..0) panic.
+    if n == 0 {
+        return Ok(PyArray1::zeros_bound(py, [0], false));
+    }
+
+    // ── Extract slices and validate dimensions ───────────────────────────────
     let csr_d = csr_data.as_slice()?;
     let csr_i = csr_indices.as_slice()?;
     let csr_p = csr_indptr.as_slice()?;
     let s_sl  = s_in.as_slice()?;
     let lf_sl = local_field_in.as_slice()?;
 
-    if diag_sl.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            format!("diag length mismatch: expected {}, got {}", n, diag_sl.len())
-        ));
-    }
     if s_sl.len() != n {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             format!("s_in length mismatch: expected {}, got {}", n, s_sl.len())
@@ -101,14 +99,14 @@ fn solve_sa_ising_rust<'py>(
             format!("local_field_in length mismatch: expected {}, got {}", n, lf_sl.len())
         ));
     }
-    if !csr_d.is_empty() && csr_p.len() != n + 1 {
+    // Validate indptr unconditionally — required for safe scatter even when nnz==0.
+    if csr_p.len() != n + 1 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             format!("csr_indptr length mismatch: expected {}, got {}", n + 1, csr_p.len())
         ));
     }
 
-    // ── Copy to owned Vecs for GIL release (Fix 2) ─────────────────────────
-    let diag_owned: Vec<f64> = diag_sl.to_vec();
+    // ── Copy to owned Vecs for GIL release ──────────────────────────────────
     let csr_d_owned: Vec<f64> = csr_d.to_vec();
     let csr_i_owned: Vec<i32> = csr_i.to_vec();
     let csr_p_owned: Vec<i32> = csr_p.to_vec();
@@ -116,10 +114,10 @@ fn solve_sa_ising_rust<'py>(
     let mut lf: Vec<f64> = lf_sl.to_vec();
     let mut best_s: Vec<f64> = s.clone();
 
-    // ── RNG: xoshiro128++ — seeded from OS entropy, initialised once ───────
+    // ── RNG: xoshiro128++ — seeded from OS entropy, initialised once ────────
     let mut rng = SmallRng::from_entropy();
 
-    // ── Release GIL for the entire computation (Fix 2) ─────────────────────
+    // ── Release GIL for the entire computation ───────────────────────────────
     let best_s = py.allow_threads(move || {
         let mut energy      = energy_init;
         let mut best_energy = energy;
@@ -133,10 +131,9 @@ fn solve_sa_ising_rust<'py>(
 
             let idx = rng.gen_range(0..n);
 
-            // SAFETY: idx < n; all slices validated to length n (or n+1).
-            let (s_old, lf_val) = unsafe {
-                (*s.get_unchecked(idx), *lf.get_unchecked(idx))
-            };
+            // Safe indexed access — idx < n, slices validated to length n.
+            let s_old  = s[idx];
+            let lf_val = lf[idx];
 
             // O(1) energy delta from single-spin flip
             let delta_e = -2.0 * s_old * lf_val;
@@ -149,11 +146,11 @@ fn solve_sa_ising_rust<'py>(
 
             if accept {
                 let s_new = -s_old; // flip
-                unsafe { *s.get_unchecked_mut(idx) = s_new };
+                s[idx] = s_new;
                 energy += delta_e;
 
                 // ── Dense local-field update: lf[j] += γ·s_new  (∀j) ──────
-                // Iterator-based loop: bounds-check free, LLVM vectorises to AVX2.
+                // Iterator-based loop: LLVM vectorises to AVX2.
                 let gamma_s = gamma * s_new;
                 for v in lf.iter_mut() {
                     *v += gamma_s;
@@ -161,19 +158,21 @@ fn solve_sa_ising_rust<'py>(
 
                 // Self-correction at the flipped node: cancel the γ broadcast
                 // (no self-interaction — Ising model has no diagonal coupling)
-                unsafe {
-                    *lf.get_unchecked_mut(idx) -= gamma * s_new;
-                }
+                lf[idx] -= gamma * s_new;
 
                 // ── Sparse row scatter: lf[c] += J[idx, c]·s_new ──────────
-                // Reads the CSR row for `idx` (symmetric off-diagonal part).
-                let row_start = unsafe { *csr_p_owned.get_unchecked(idx) }     as usize;
-                let row_end   = unsafe { *csr_p_owned.get_unchecked(idx + 1) } as usize;
+                // Clamp row bounds to actual array lengths to guard against
+                // malformed indptr values from the Python side.
+                let row_start = (csr_p_owned[idx]     as usize)
+                    .min(csr_d_owned.len()).min(csr_i_owned.len());
+                let row_end   = (csr_p_owned[idx + 1] as usize)
+                    .min(csr_d_owned.len()).min(csr_i_owned.len())
+                    .max(row_start);
                 for ptr in row_start..row_end {
-                    unsafe {
-                        let c   = *csr_i_owned.get_unchecked(ptr) as usize;
-                        let val = *csr_d_owned.get_unchecked(ptr);
-                        *lf.get_unchecked_mut(c) += val * s_new;
+                    let c   = csr_i_owned[ptr] as usize;
+                    let val = csr_d_owned[ptr];
+                    if c < n {
+                        lf[c] += val * s_new;
                     }
                 }
 
@@ -311,12 +310,15 @@ fn solve_fep_analog_rust<'py>(
                     let start = csr_p_owned[i]     as usize;
                     let end   = csr_p_owned[i + 1] as usize;
                     let mut acc = 0.0f64;
-                    // SAFETY: ptr in [start, end) ⊂ [0, nnz); c = csr_i[ptr] < n.
-                    unsafe {
-                        for ptr in start..end {
-                            let c   = *csr_i_owned.get_unchecked(ptr) as usize;
-                            let val = *csr_d_owned.get_unchecked(ptr);
-                            acc += val * *g_v.get_unchecked(c);
+                    // Clamp bounds to guard against malformed indptr from Python.
+                    let safe_start = start.min(csr_i_owned.len()).min(csr_d_owned.len());
+                    let safe_end   = end.min(csr_i_owned.len()).min(csr_d_owned.len())
+                        .max(safe_start);
+                    for ptr in safe_start..safe_end {
+                        let c   = csr_i_owned[ptr] as usize;
+                        let val = csr_d_owned[ptr];
+                        if c < n {
+                            acc += val * g_v[c];
                         }
                     }
                     j_g_v[i] = acc;
@@ -352,7 +354,7 @@ fn solve_fep_analog_rust<'py>(
 
             // ── 5. Stopping criteria ────────────────────────────────────────
             if p_err < nirvana_threshold
-                || dv_norm2 * dt_cur * dt_cur < nirvana_threshold
+                || dv_norm2 < nirvana_threshold
             {
                 break;
             }
@@ -470,7 +472,9 @@ fn solve_submodular_greedy_rust<'py>(
                     }
                 }
                 if new_gain.is_nan() { new_gain = 0.0; }
-                top.gain = OrderedFloat(new_gain);
+                // Clip rounding errors: marginal gain is monotone non-increasing.
+                let safe_gain = new_gain.min(top.gain.into_inner());
+                top.gain = OrderedFloat(safe_gain);
                 top.iteration = current_iter;
                 pq.push(top);
             }

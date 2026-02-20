@@ -145,7 +145,7 @@ def _solve_shim(
         if P_err < nirvana_threshold:
             break
 
-        if float(np.dot(dV_dt, dV_dt)) * dt * dt < nirvana_threshold:
+        if float(np.dot(dV_dt, dV_dt)) < nirvana_threshold:
             break
 
         if P_err < prev_P * 0.95:
@@ -206,7 +206,7 @@ def _solve_vectorized(
         if P_err < nirvana_threshold:
             break
 
-        if float(np.dot(dV_dt, dV_dt)) * dt * dt < nirvana_threshold:
+        if float(np.dot(dV_dt, dV_dt)) < nirvana_threshold:
             break
 
         if P_err < prev_P * 0.95:
@@ -272,7 +272,7 @@ def _solve_gpu(
         if P_err < nirvana_threshold:
             break
 
-        if float(cp.dot(dV_dt, dV_dt)) * dt * dt < nirvana_threshold:
+        if float(cp.dot(dV_dt, dV_dt)) < nirvana_threshold:
             break
 
         if P_err < prev_P * 0.95:
@@ -446,7 +446,7 @@ def _solve_analog_shim(
         if P_err < nirvana_threshold:
             break
 
-        if float(np.dot(dV_dt, dV_dt)) * dt * dt < nirvana_threshold:
+        if float(np.dot(dV_dt, dV_dt)) < nirvana_threshold:
             break
 
         if P_err < prev_P * 0.95:
@@ -503,7 +503,7 @@ def _solve_analog_vectorized(
         if P_err < nirvana_threshold:
             break
 
-        if float(np.dot(dV_dt, dV_dt)) * dt * dt < nirvana_threshold:
+        if float(np.dot(dV_dt, dV_dt)) < nirvana_threshold:
             break
 
         if P_err < prev_P * 0.95:
@@ -563,7 +563,7 @@ def _solve_analog_gpu(
         if P_err < nirvana_threshold:
             break
 
-        if float(cp.dot(dV_dt, dV_dt)) * dt * dt < nirvana_threshold:
+        if float(cp.dot(dV_dt, dV_dt)) < nirvana_threshold:
             break
 
         if P_err < prev_P * 0.95:
