@@ -84,7 +84,8 @@ class HyperReasoner(BaseReasoner):
             n_connect = min(len(top_indices), 3)
             # Energy-weighted connection probability
             top_h = abs_h[top_indices]
-            probs = top_h / max(float(top_h.sum()), 1e-8)
+            h_sum = float(top_h.sum())
+            probs = top_h / h_sum if h_sum > 1e-8 else None
             chosen = rng.choice(top_indices, size=n_connect, replace=False, p=probs)
             for obs_idx in chosen:
                 w = self.latent_coupling * rng.uniform(0.5, 1.0)
