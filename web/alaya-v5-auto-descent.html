@@ -1433,7 +1433,7 @@
           } catch(err) { reconnectTimer = setTimeout(connect, 5000); }
         };
         connect();
-        return () => { if(ws) ws.close(); clearTimeout(reconnectTimer); };
+        return () => { clearTimeout(reconnectTimer); if(ws) { ws.onclose = null; ws.close(); } };
       },[]);
 
       // Fallback HTTP polling (when WebSocket not connected)

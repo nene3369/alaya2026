@@ -165,9 +165,11 @@ class DharmaReasonerOrchestrator:
                 votes[int(idx)] += 1.0
 
         # Select top-k by vote count (tie-break by |h|)
+        # abs_h を [0,1) に正規化してタイブレーク専用にする。
+        # votes は整数なので abs_h_norm < 1 との衝突がなく、票数が常に支配する。
         abs_h = np.array([abs(float(x)) for x in h])
-        # Combine votes with h as secondary sort
-        combined = votes * n + abs_h
+        abs_h_norm = (abs_h - abs_h.min()) / (abs_h.max() - abs_h.min() + 1e-12)
+        combined = votes + abs_h_norm
         ensemble_indices = np.argsort(-combined)[:k]
         ensemble_indices = np.array(sorted(int(i) for i in ensemble_indices))
 
@@ -175,6 +177,11 @@ class DharmaReasonerOrchestrator:
         return all_result
 
     PHASE_TIMEOUT: float = 5.0  # max seconds per reasoning phase
+    # Pythonはスレッドを強制終了できないため、タイムアウト後もスレッドが生き続ける。
+    # セマフォで同時実行スレッド数の上限を設けることで「ゾンビスレッドの無限増殖」を防ぐ。
+    # タイムアウトしたスレッドは finally ブロックでセマフォを解放するため、
+    # 時間が経てば枠が回復し、枯渇は一時的なものにとどまる。
+    _inflight_sem: threading.Semaphore = threading.Semaphore(8)
 
     def _reason_with_timeout(
         self,
@@ -192,6 +199,12 @@ class DharmaReasonerOrchestrator:
         if breaker is not None and not breaker.allow_request():
             return None  # Circuit is open — skip this reasoner
 
+        # 上限（8スレッド）に達していたら即 None を返してスレッドを作らない
+        if not DharmaReasonerOrchestrator._inflight_sem.acquire(blocking=False):
+            if breaker is not None:
+                breaker.record_failure()
+            return None
+
         reasoner = self._reasoners[reasoner_name]
         result_box: list[ReasonerResult | None] = [None]
         error_box: list[Exception | None] = [None]
@@ -201,6 +214,9 @@ class DharmaReasonerOrchestrator:
                 result_box[0] = reasoner.reason(h, J, **kwargs)
             except Exception as exc:
                 error_box[0] = exc
+            finally:
+                # タイムアウト後に完了した場合も必ずセマフォを解放する
+                DharmaReasonerOrchestrator._inflight_sem.release()
 
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()

@@ -90,7 +90,7 @@ class PinealSampler:
 
         # Repetition penalty
         if prev_token_ids and self.repetition_penalty != 1.0:
-            for tid in prev_token_ids:
+            for tid in set(prev_token_ids):
                 if 0 <= tid < vocab_size:
                     if logits[tid] > 0:
                         logits[tid] /= self.repetition_penalty
@@ -128,6 +128,9 @@ class PinealSampler:
             total = probs.sum()
             if total > 0:
                 probs = probs / total
+            else:
+                # top-p後に全確率がゼロ → 一様分布にフォールバック
+                probs = np.ones(vocab_size) / vocab_size
 
         # Count candidates
         n_candidates = sum(1 for v in probs if v > 1e-10)

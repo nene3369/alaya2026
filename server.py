@@ -1878,7 +1878,8 @@ app.add_middleware(
 # ===================================================================
 # Session Manager — セッション別パイプライン管理 + 自動クリーンアップ
 # ===================================================================
-SESSION_TTL = 300  # 5分未使用でクリーンアップ
+SESSION_TTL   = 300   # 5分未使用でクリーンアップ
+_MAX_SESSIONS = 500   # セッション数の上限（DDoS対策）
 
 
 # ===================================================================
@@ -1985,6 +1986,18 @@ class SessionManager:
         self._sessions: dict[str, tuple[DescentPipeline, float]] = {}
         self._lock = asyncio.Lock()
 
+    async def _evict_lru(self) -> None:
+        """上限超過時に最も古いセッションを1件退避（タスクをキャンセル）。"""
+        if not self._sessions:
+            return
+        lru_key = min(self._sessions, key=lambda k: self._sessions[k][1])
+        pipe, _ = self._sessions.pop(lru_key)
+        pipe.heartbeat.stop()
+        for attr in ("_heartbeat_task", "_topology_task"):
+            task = getattr(pipe, attr, None)
+            if task and not task.done():
+                task.cancel()
+
     async def get(self, session_id: str | None = None) -> DescentPipeline:
         key = session_id or "__default__"
         async with self._lock:
@@ -1992,6 +2005,9 @@ class SessionManager:
                 pipe, _ = self._sessions[key]
                 self._sessions[key] = (pipe, time.time())
                 return pipe
+            # 上限に達していたら最古セッションを退避（DDoS対策）
+            if len(self._sessions) >= _MAX_SESSIONS:
+                await self._evict_lru()
             pipe = DescentPipeline()
             # Start heartbeat daemon for this session
             pipe._heartbeat_task = asyncio.create_task(pipe.heartbeat.run())

@@ -192,7 +192,14 @@ class CUDADevice(ComputeDevice):
         cp = self._cp
         with cp.cuda.Device(self._device_id):
             gV = cp.asarray(V)
-            gJ = cp.asarray(J) if not sparse.issparse(J) else cp.sparse.csr_matrix(J)
+            if sparse.issparse(J):
+                try:
+                    import cupyx.scipy.sparse as _cpx_sp
+                    gJ = _cpx_sp.csr_matrix(J)
+                except (ImportError, AttributeError):
+                    gJ = cp.asarray(J.toarray())
+            else:
+                gJ = cp.asarray(J)
             gVs = cp.asarray(V_s)
             g = cp.tanh(gV)
             g_prime = 1.0 - g ** 2
