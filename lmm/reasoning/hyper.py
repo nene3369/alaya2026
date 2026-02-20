@@ -110,7 +110,7 @@ class HyperReasoner(BaseReasoner):
 
         V_s = -h_ext.copy()
         if sila_gamma > 0:
-            V_s = V_s - sila_gamma * (n_orig - 2 * self.k)
+            V_s = V_s - sila_gamma * (1.0 - 2.0 * self.k)
 
         J_dynamic = J_ext * (-1.0) if J_ext.nnz > 0 else J_ext
 

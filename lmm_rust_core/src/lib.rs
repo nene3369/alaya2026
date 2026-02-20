@@ -72,84 +72,115 @@ fn solve_sa_ising_rust<'py>(
     csr_indices: PyReadonlyArray1<'py, i32>,
     csr_indptr: PyReadonlyArray1<'py, i32>,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-    // ── Zero-copy read-only slices ─────────────────────────────────────────
-    let diag  = diag.as_slice()?;
+    // ── Extract slices and validate dimensions (Fix 3: boundary checks) ─────
+    let diag_sl  = diag.as_slice()?;
     let csr_d = csr_data.as_slice()?;
     let csr_i = csr_indices.as_slice()?;
     let csr_p = csr_indptr.as_slice()?;
+    let s_sl  = s_in.as_slice()?;
+    let lf_sl = local_field_in.as_slice()?;
 
-    // ── Mutable working copies (two O(n) allocations only) ────────────────
-    let mut s:    Vec<f64> = s_in.as_slice()?.to_vec();
-    let mut lf:   Vec<f64> = local_field_in.as_slice()?.to_vec();
+    if diag_sl.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("diag length mismatch: expected {}, got {}", n, diag_sl.len())
+        ));
+    }
+    if s_sl.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("s_in length mismatch: expected {}, got {}", n, s_sl.len())
+        ));
+    }
+    if lf_sl.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("local_field_in length mismatch: expected {}, got {}", n, lf_sl.len())
+        ));
+    }
+    if !csr_d.is_empty() && csr_p.len() != n + 1 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("csr_indptr length mismatch: expected {}, got {}", n + 1, csr_p.len())
+        ));
+    }
+
+    // ── Copy to owned Vecs for GIL release (Fix 2) ─────────────────────────
+    let diag_owned: Vec<f64> = diag_sl.to_vec();
+    let csr_d_owned: Vec<f64> = csr_d.to_vec();
+    let csr_i_owned: Vec<i32> = csr_i.to_vec();
+    let csr_p_owned: Vec<i32> = csr_p.to_vec();
+    let mut s: Vec<f64> = s_sl.to_vec();
+    let mut lf: Vec<f64> = lf_sl.to_vec();
     let mut best_s: Vec<f64> = s.clone();
 
     // ── RNG: xoshiro128++ — seeded from OS entropy, initialised once ───────
     let mut rng = SmallRng::from_entropy();
 
-    let mut energy      = energy_init;
-    let mut best_energy = energy;
+    // ── Release GIL for the entire computation (Fix 2) ─────────────────────
+    let best_s = py.allow_threads(move || {
+        let mut energy      = energy_init;
+        let mut best_energy = energy;
 
-    let temp_ratio  = temp_end / temp_start;
-    let n_iter_f    = n_iterations as f64;
+        let temp_ratio  = temp_end / temp_start;
+        let n_iter_f    = n_iterations as f64;
 
-    for step in 0..n_iterations {
-        // Geometric annealing schedule: T(t) = T0 · r^(t/N)
-        let temp = temp_start * temp_ratio.powf(step as f64 / n_iter_f);
+        for step in 0..n_iterations {
+            // Geometric annealing schedule: T(t) = T0 · r^(t/N)
+            let temp = temp_start * temp_ratio.powf(step as f64 / n_iter_f);
 
-        let idx = rng.gen_range(0..n);
+            let idx = rng.gen_range(0..n);
 
-        // SAFETY: idx < n; all slices have been validated to length n (or n+1).
-        let (s_old, lf_val) = unsafe {
-            (*s.get_unchecked(idx), *lf.get_unchecked(idx))
-        };
+            // SAFETY: idx < n; all slices validated to length n (or n+1).
+            let (s_old, lf_val) = unsafe {
+                (*s.get_unchecked(idx), *lf.get_unchecked(idx))
+            };
 
-        // O(1) energy delta from single-spin flip
-        let delta_e = -2.0 * s_old * lf_val;
+            // O(1) energy delta from single-spin flip
+            let delta_e = -2.0 * s_old * lf_val;
 
-        // Metropolis acceptance criterion
-        let accept = delta_e < 0.0 || {
-            let t = if temp > 1e-15 { temp } else { 1e-15 };
-            rng.gen::<f64>() < (-delta_e / t).exp()
-        };
+            // Metropolis acceptance criterion
+            let accept = delta_e < 0.0 || {
+                let t = if temp > 1e-15 { temp } else { 1e-15 };
+                rng.gen::<f64>() < (-delta_e / t).exp()
+            };
 
-        if accept {
-            let s_new = -s_old; // flip
-            unsafe { *s.get_unchecked_mut(idx) = s_new };
-            energy += delta_e;
+            if accept {
+                let s_new = -s_old; // flip
+                unsafe { *s.get_unchecked_mut(idx) = s_new };
+                energy += delta_e;
 
-            // ── Dense local-field update: lf[j] += γ·s_new  (∀j) ──────────
-            // Iterator-based loop: bounds-check free, LLVM vectorises to AVX2.
-            let gamma_s = gamma * s_new;
-            for v in lf.iter_mut() {
-                *v += gamma_s;
-            }
+                // ── Dense local-field update: lf[j] += γ·s_new  (∀j) ──────
+                // Iterator-based loop: bounds-check free, LLVM vectorises to AVX2.
+                let gamma_s = gamma * s_new;
+                for v in lf.iter_mut() {
+                    *v += gamma_s;
+                }
 
-            // Self-correction at the flipped node (cancels the γ term, adds diag)
-            // Δlf[idx] = (diag[idx] - γ)·s_new  (net: diag[idx]·s_new)
-            unsafe {
-                *lf.get_unchecked_mut(idx) +=
-                    (*diag.get_unchecked(idx) - gamma) * s_new;
-            }
-
-            // ── Sparse row scatter: lf[c] += J[idx, c]·s_new ──────────────
-            // Reads the CSR row for `idx` (symmetric off-diagonal part).
-            let row_start = unsafe { *csr_p.get_unchecked(idx) }     as usize;
-            let row_end   = unsafe { *csr_p.get_unchecked(idx + 1) } as usize;
-            for ptr in row_start..row_end {
+                // Self-correction at the flipped node: cancel the γ broadcast
+                // (no self-interaction — Ising model has no diagonal coupling)
                 unsafe {
-                    let c   = *csr_i.get_unchecked(ptr) as usize;
-                    let val = *csr_d.get_unchecked(ptr);
-                    *lf.get_unchecked_mut(c) += val * s_new;
+                    *lf.get_unchecked_mut(idx) -= gamma * s_new;
+                }
+
+                // ── Sparse row scatter: lf[c] += J[idx, c]·s_new ──────────
+                // Reads the CSR row for `idx` (symmetric off-diagonal part).
+                let row_start = unsafe { *csr_p_owned.get_unchecked(idx) }     as usize;
+                let row_end   = unsafe { *csr_p_owned.get_unchecked(idx + 1) } as usize;
+                for ptr in row_start..row_end {
+                    unsafe {
+                        let c   = *csr_i_owned.get_unchecked(ptr) as usize;
+                        let val = *csr_d_owned.get_unchecked(ptr);
+                        *lf.get_unchecked_mut(c) += val * s_new;
+                    }
+                }
+
+                // Track global minimum
+                if energy < best_energy {
+                    best_energy = energy;
+                    best_s.copy_from_slice(&s);
                 }
             }
-
-            // Track global minimum
-            if energy < best_energy {
-                best_energy = energy;
-                best_s.copy_from_slice(&s);
-            }
         }
-    }
+
+        best_s
+    });
 
     // Return best_s as a new (owned) NumPy array — zero extra copy.
     Ok(best_s.into_pyarray(py))
@@ -207,116 +238,134 @@ fn solve_fep_analog_rust<'py>(
     csr_indices: PyReadonlyArray1<'py, i32>,
     csr_indptr: PyReadonlyArray1<'py, i32>,
 ) -> PyResult<(Bound<'py, PyArray1<f64>>, usize, Vec<f64>)> {
-    // ── Zero-copy read-only slices ─────────────────────────────────────────
+    // ── Extract slices and validate dimensions (Fix 3: boundary checks) ─────
     let v_s_sl = v_s.as_slice()?;
+    let v_init_sl = v_init.as_slice()?;
     let csr_d  = csr_data.as_slice()?;
     let csr_i  = csr_indices.as_slice()?;
     let csr_p  = csr_indptr.as_slice()?;
     let has_j  = !csr_d.is_empty();
 
-    // ── Mutable state vectors ──────────────────────────────────────────────
-    let mut v:      Vec<f64> = v_init.as_slice()?.to_vec();
-    let mut v_prev: Vec<f64> = v.clone();
-    // v_new is a swap buffer — never returned to Python directly.
-    let mut v_new:  Vec<f64> = vec![0.0; n];
-
-    // ── Scratch buffers — single allocation, reused every step ────────────
-    let mut g_v:      Vec<f64> = vec![0.0; n];
-    let mut jacobian: Vec<f64> = vec![0.0; n];
-    let mut j_g_v:    Vec<f64> = vec![0.0; n];
-    let mut error:    Vec<f64> = vec![0.0; n];
-    let mut dv_dt:    Vec<f64> = vec![0.0; n];
-
-    let inv_tau = 1.0 / tau_leak;
-
-    let mut dt_cur = dt;
-    let dt_min     = dt * 0.1;
-    let dt_max     = dt * 10.0;
-
-    let mut prev_p        = f64::INFINITY;
-    let mut power_history = Vec::<f64>::with_capacity(max_steps.min(2048));
-    let mut steps_done    = 0usize;
-    let mut momentum      = 0.0f64;
-
-    for step in 0..max_steps {
-        // ── 1. Activation g(V) = tanh(V),  Jacobian J = 1 − g² ───────────
-        for i in 0..n {
-            let gv    = v[i].tanh();
-            g_v[i]    = gv;
-            jacobian[i] = 1.0 - gv * gv;
-        }
-
-        // ── 2. SpMV: J_g_V[i] = Σ_c  J[i,c] · g_V[c]  (inline CSR) ──────
-        if has_j {
-            for i in 0..n {
-                // csr_p is length n+1; csr_p[i+1] is valid for i < n.
-                let start = csr_p[i]     as usize;
-                let end   = csr_p[i + 1] as usize;
-                let mut acc = 0.0f64;
-                // SAFETY: ptr in [start, end) ⊂ [0, nnz); c = csr_i[ptr] < n.
-                unsafe {
-                    for ptr in start..end {
-                        let c   = *csr_i.get_unchecked(ptr) as usize;
-                        let val = *csr_d.get_unchecked(ptr);
-                        acc += val * *g_v.get_unchecked(c);
-                    }
-                }
-                j_g_v[i] = acc;
-            }
-        } else {
-            // No coupling matrix — J_g_V is identically zero.
-            j_g_v.iter_mut().for_each(|x| *x = 0.0);
-        }
-
-        // ── 3. Error, KCL dynamics, accumulate norms ──────────────────────
-        let mut p_err_acc = 0.0f64;
-        let mut dv_norm2  = 0.0f64;
-        for i in 0..n {
-            let e  = v_s_sl[i] + j_scale * j_g_v[i] - g_v[i];
-            let dv = -v[i] * inv_tau + jacobian[i] * (g_prec_base * e);
-            error[i] = e;
-            dv_dt[i] = dv;
-            p_err_acc += e  * e;
-            dv_norm2  += dv * dv;
-        }
-        let p_err = g_prec_base * p_err_acc;
-
-        // ── 4. Euler step + Polyak momentum ───────────────────────────────
-        for i in 0..n {
-            v_new[i] = v[i]
-                + dv_dt[i] * dt_cur
-                + momentum * (v[i] - v_prev[i]);
-        }
-        // Swap without re-allocation:
-        //   v_prev ← v (old V becomes previous)
-        //   v      ← v_new (newly computed V)
-        //   v_new  ← garbage (will be overwritten next iteration)
-        std::mem::swap(&mut v, &mut v_new);      // v = v_new_computed, v_new = v_old
-        std::mem::swap(&mut v_prev, &mut v_new); // v_prev = v_old,     v_new = v_prev_old
-
-        power_history.push(p_err);
-        steps_done = step + 1;
-
-        // ── 5. Stopping criteria ──────────────────────────────────────────
-        if p_err < nirvana_threshold
-            || dv_norm2 * dt_cur * dt_cur < nirvana_threshold
-        {
-            break;
-        }
-
-        // ── 6. Adaptive timestep & momentum (Nesterov-style schedule) ─────
-        if p_err < prev_p * 0.95 {
-            dt_cur   = (dt_cur * 1.2).min(dt_max);
-            momentum = (momentum + 0.05).min(0.6);
-        } else if p_err > prev_p {
-            dt_cur   = (dt_cur * 0.7).max(dt_min);
-            momentum = (momentum * 0.5).max(0.0);
-        }
-        prev_p = p_err;
+    if v_init_sl.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("v_init length mismatch: expected {}, got {}", n, v_init_sl.len())
+        ));
+    }
+    if v_s_sl.len() != n {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("v_s length mismatch: expected {}, got {}", n, v_s_sl.len())
+        ));
+    }
+    if has_j && csr_p.len() != n + 1 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("csr_indptr length mismatch: expected {}, got {}", n + 1, csr_p.len())
+        ));
     }
 
-    // `v` now holds the final membrane potentials — transfer ownership to Python.
-    Ok((v.into_pyarray(py), steps_done, power_history))
+    // ── Copy to owned Vecs for GIL release (Fix 2) ─────────────────────────
+    let v_s_owned: Vec<f64> = v_s_sl.to_vec();
+    let csr_d_owned: Vec<f64> = csr_d.to_vec();
+    let csr_i_owned: Vec<i32> = csr_i.to_vec();
+    let csr_p_owned: Vec<i32> = csr_p.to_vec();
+    let mut v: Vec<f64> = v_init_sl.to_vec();
+    let mut v_prev: Vec<f64> = v.clone();
+    let mut v_new: Vec<f64> = vec![0.0; n];
+
+    // ── Release GIL for the entire computation (Fix 2) ─────────────────────
+    let (v_final, steps_done, power_history) = py.allow_threads(move || {
+        // ── Scratch buffers — single allocation, reused every step ──────────
+        let mut g_v:      Vec<f64> = vec![0.0; n];
+        let mut jacobian: Vec<f64> = vec![0.0; n];
+        let mut j_g_v:    Vec<f64> = vec![0.0; n];
+        let mut error:    Vec<f64> = vec![0.0; n];
+        let mut dv_dt:    Vec<f64> = vec![0.0; n];
+
+        let inv_tau = 1.0 / tau_leak;
+
+        let mut dt_cur = dt;
+        let dt_min     = dt * 0.1;
+        let dt_max     = dt * 10.0;
+
+        let mut prev_p        = f64::INFINITY;
+        let mut power_history = Vec::<f64>::with_capacity(max_steps.min(2048));
+        let mut steps_done    = 0usize;
+        let mut momentum      = 0.0f64;
+
+        for step in 0..max_steps {
+            // ── 1. Activation g(V) = tanh(V),  Jacobian J = 1 − g² ─────────
+            for i in 0..n {
+                let gv    = v[i].tanh();
+                g_v[i]    = gv;
+                jacobian[i] = 1.0 - gv * gv;
+            }
+
+            // ── 2. SpMV: J_g_V[i] = Σ_c  J[i,c] · g_V[c]  (inline CSR) ────
+            if has_j {
+                for i in 0..n {
+                    let start = csr_p_owned[i]     as usize;
+                    let end   = csr_p_owned[i + 1] as usize;
+                    let mut acc = 0.0f64;
+                    // SAFETY: ptr in [start, end) ⊂ [0, nnz); c = csr_i[ptr] < n.
+                    unsafe {
+                        for ptr in start..end {
+                            let c   = *csr_i_owned.get_unchecked(ptr) as usize;
+                            let val = *csr_d_owned.get_unchecked(ptr);
+                            acc += val * *g_v.get_unchecked(c);
+                        }
+                    }
+                    j_g_v[i] = acc;
+                }
+            } else {
+                j_g_v.iter_mut().for_each(|x| *x = 0.0);
+            }
+
+            // ── 3. Error, KCL dynamics, accumulate norms ────────────────────
+            let mut p_err_acc = 0.0f64;
+            let mut dv_norm2  = 0.0f64;
+            for i in 0..n {
+                let e  = v_s_owned[i] + j_scale * j_g_v[i] - g_v[i];
+                let dv = -v[i] * inv_tau + jacobian[i] * (g_prec_base * e);
+                error[i] = e;
+                dv_dt[i] = dv;
+                p_err_acc += e  * e;
+                dv_norm2  += dv * dv;
+            }
+            let p_err = g_prec_base * p_err_acc;
+
+            // ── 4. Euler step + Polyak momentum ─────────────────────────────
+            for i in 0..n {
+                v_new[i] = v[i]
+                    + dv_dt[i] * dt_cur
+                    + momentum * (v[i] - v_prev[i]);
+            }
+            std::mem::swap(&mut v, &mut v_new);
+            std::mem::swap(&mut v_prev, &mut v_new);
+
+            power_history.push(p_err);
+            steps_done = step + 1;
+
+            // ── 5. Stopping criteria ────────────────────────────────────────
+            if p_err < nirvana_threshold
+                || dv_norm2 * dt_cur * dt_cur < nirvana_threshold
+            {
+                break;
+            }
+
+            // ── 6. Adaptive timestep & momentum (Nesterov-style schedule) ───
+            if p_err < prev_p * 0.95 {
+                dt_cur   = (dt_cur * 1.2).min(dt_max);
+                momentum = (momentum + 0.05).min(0.6);
+            } else if p_err > prev_p {
+                dt_cur   = (dt_cur * 0.7).max(dt_min);
+                momentum = (momentum * 0.5).max(0.0);
+            }
+            prev_p = p_err;
+        }
+
+        (v, steps_done, power_history)
+    });
+
+    Ok((v_final.into_pyarray(py), steps_done, power_history))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

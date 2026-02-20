@@ -237,7 +237,8 @@ class UniversalDharmaEngine:
         rng = np.random.default_rng()
         n = self.n
         rs = np.asarray(J.sum(axis=1)).flatten() if J.nnz > 0 else np.zeros(n)
-        h_ising = 3.0 * h / 4.0 + rs / 8.0 + sila_gamma * (n - 1) / 8.0
+        # Correct QUBO→Ising linear bias: h_i = Q_ii/2 + rowsum_i/2
+        h_ising = h / 2.0 + (rs + sila_gamma * (n - 1)) / 2.0
 
         s = (2.0 * initial_state - 1.0).copy() if initial_state is not None else rng.choice([-1.0, 1.0], size=n)
         sum_s = float(np.sum(s))
@@ -296,9 +297,11 @@ class UniversalDharmaEngine:
         # デジタルFEPが毎ステップ発火数に応じてペナルティを動的計算するのに対し、
         # アナログFEPはV_sが固定のため静的補正しかできない。
         # そこで外部ループで「実際の発火数の過不足」を V_s に反映し、
-        # 最大3回の反復補正で定員 k を動的に実現する。
+        # 反復補正で定員 k を動的に実現する。
+        # 学習率で減衰: sila_gamma=10.0, lr=0.1 → 有効補正=1.0*excess（安定）
         x_final = None
-        n_iters = 3 if sila_gamma > 0 else 1
+        sila_lr = 0.1
+        n_iters = 5 if sila_gamma > 0 else 1
         for _ in range(n_iters):
             V_mu, x_final, steps, _ = solve_fep_kcl_analog(
                 V_s=V_s, J_dynamic=J_dyn, n=self.n, G_prec_base=G_prec,
@@ -308,7 +311,7 @@ class UniversalDharmaEngine:
                 if abs(excess) < 0.5:
                     break
                 # 過剰発火 → V_s を下げて抑制 / 不足 → V_s を上げて促進
-                V_s -= sila_gamma * excess
+                V_s -= sila_gamma * excess * sila_lr
 
         top_k = np.argsort(-x_final)[:k]
         selected = np.array(sorted(int(i) for i in top_k))

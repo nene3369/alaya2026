@@ -103,7 +103,7 @@ class ActiveInferenceEngine(BaseReasoner):
 
         # Apply sila_gamma bias consistently with existing V_s computation
         if sila_gamma > 0:
-            score = score - sila_gamma * (self.n - 2 * self.k)
+            score = score - sila_gamma * (1.0 - 2.0 * self.k)
 
         for idx in action_result.node_indices:
             idx_int = int(idx)
@@ -127,7 +127,7 @@ class ActiveInferenceEngine(BaseReasoner):
 
         V_s_base = -h.copy()
         if sila_gamma > 0:
-            V_s_base = V_s_base - sila_gamma * (self.n - 2 * self.k)
+            V_s_base = V_s_base - sila_gamma * (1.0 - 2.0 * self.k)
 
         J_dynamic = J * (-1.0) if J.nnz > 0 else J
 

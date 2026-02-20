@@ -91,7 +91,7 @@ class EmbodiedAgent(BaseReasoner):
         sensory = self.fuse_senses()
         V_s = -h.copy() + sensory
         if sila_gamma > 0:
-            V_s = V_s - sila_gamma * (self.n - 2 * self.k)
+            V_s = V_s - sila_gamma * (1.0 - 2.0 * self.k)
 
         J_dynamic = J * (-1.0) if J.nnz > 0 else J
 
