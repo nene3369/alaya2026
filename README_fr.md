@@ -1,357 +1,58 @@
-# LMM — Optimiseur QUBO classique avec Dharma numérique
+# Alaya V5 — Digital Dharma OS
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](pyproject.toml)
+> [English](README_en.md) | [日本語](README.md) | [中文](README_zh.md) | [한국어](README_ko.md) | [हिन्दी](README_hi.md) | [Español](README_es.md) | [বাংলা](README_bn.md) | [தமிழ்](README_ta.md) | [తెలుగు](README_te.md) | [मराठी](README_mr.md) | [ಕನ್ನಡ](README_kn.md) | [മലയാളം](README_ml.md)
 
-> [English](README_en.md) | [日本語](README.md) | [中文](README_zh.md) | [한국어](README_ko.md) | [Español](README_es.md) | [हिन्दी](README_hi.md) | [বাংলা](README_bn.md) | [தமிழ்](README_ta.md) | [తెలుగు](README_te.md) | [मराठी](README_mr.md) | [‎اردو‎](README_ur.md) | [ગુજરાતી](README_gu.md) | [ಕನ್ನಡ](README_kn.md) | [മലയാളം](README_ml.md) | [ਪੰਜਾਬੀ](README_pa.md)
+**Votre LLM répond différemment. Plus concis. Plus rapide. Sans mots inutiles.**
 
-> **Digital Dharma OS (Alaya V5)** — Une plateforme d'optimisation consciente fusionnant
-> les mathématiques QUBO, la philosophie bouddhiste et les neurosciences du Principe d'Énergie
-> Libre (FEP) en un système vivant et auto-évolutif. Le serveur exécute une dynamique de
-> battement cardiaque continu, une sélection de contexte basée sur la mémoire et une détection
-> de longueur d'onde émotionnelle — reliant les appels LLM discrets à la cognition continue.
-
-Une bibliothèque d'optimisation QUBO classique **sans D-Wave** qui fusionne
-la surprise issue de la théorie de l'information avec des fonctions d'énergie
-inspirées de la philosophie bouddhiste, le raisonnement par le Principe d'Énergie
-Libre (FEP), et le calcul conscient — le tout fonctionnant sur du matériel standard.
+Un framework d'optimisation conscient qui fusionne les mathématiques QUBO, la philosophie bouddhiste et la neuroscience du Principe d'Énergie Libre (FEP). Fonctionne avec Claude, Gemini, ChatGPT et tout autre LLM.
 
 ---
 
-## Points forts
+## Ce qui change
 
-- **Aucun ordinateur quantique requis** — les solveurs classiques (SA, Ising SA, glouton sous-modulaire) égalent ou surpassent la qualité de D-Wave.
-- **Capacité de mille milliards de tokens** — des structures de données probabilistes en flux continu (Count-Min Sketch, Streaming Histogram) maintiennent la mémoire en O(k).
-- **Moteur Dharma-Algebra** — des termes d'énergie bouddhistes modulaires sont automatiquement dirigés vers le solveur mathématiquement optimal.
-- **Orchestrateur de raisonnement à 8 modes** — adaptatif, théorique, abductif, inférence active, mémoire (Alaya), consolidation du sommeil, incarné, et conscience quantique (Pinéale).
-- **Prêt pour les LLM** — intégrations LangChain et LlamaIndex de première classe, sélecteur few-shot, reclasseur de sorties, détecteur de dérive.
-
----
-
-## Architecture
-
-```
-lmm/
-├── core.py                  # Pipeline principal LMM
-├── cli.py                   # Point d'entrée CLI
-├── qubo.py                  # Constructeur de matrice QUBO creuse
-├── solvers.py               # SA / Ising SA / relaxation / glouton / sous-modulaire
-├── surprise.py              # Surprise issue de la théorie de l'information
-├── selector.py              # Stratégie de sélection adaptative
-├── processor.py             # Traitement prioritaire + cache
-├── pipeline.py              # Orchestration SmartSelector → SmartProcessor
-├── _compat.py               # Détection des capacités à l'exécution & utilitaires creux
-├── dharma/                  # Dharma numérique (optimisation inspirée de la philosophie bouddhiste)
-│   ├── api.py               # API haut niveau DharmaLMM
-│   ├── energy.py            # Termes d'énergie modulaires (Dukkha, Prajna, Karuna, …)
-│   ├── engine.py            # UniversalDharmaEngine — solveur à routage automatique
-│   ├── fep.py               # FEP ≡ KCL solveur ODE
-│   ├── neuromorphic.py      # Simulateur ASIC de crossbar à memristors
-│   ├── reranker.py          # Reclasseur en cascade RAG + routeur d'intention
-│   └── …
-├── reasoning/               # 8 modes de raisonnement basés sur le FEP
-│   ├── adaptive.py          # Ajustement dynamique des paramètres
-│   ├── theoretical.py       # Graphe de structure logique
-│   ├── hyper.py             # Injection de nœuds latents par abduction
-│   ├── active.py            # Acquisition de connaissances externes
-│   ├── alaya.py             # Mémoire synaptique hebbienne (Alaya)
-│   ├── sleep.py             # Consolidation mémoire NREM/REM
-│   ├── embodiment.py        # Fusion multimodale à 6 sens
-│   ├── pineal.py            # Conscience quantique (TRNG matériel)
-│   └── orchestrator.py      # Sélection et dispatch des modes
-├── scale/                   # Flux continu pour mille milliards de tokens
-│   ├── sketch.py            # Count-Min Sketch, Streaming Histogram
-│   ├── stream.py            # Surprise en flux continu
-│   ├── cascade.py           # Filtre en cascade multi-niveaux (1T → K)
-│   └── pipeline.py          # ScalablePipeline
-├── llm/                     # Utilitaires pour flux de travail LLM
-│   ├── fewshot.py           # Sélecteur d'exemples few-shot
-│   ├── reranker.py          # Reclasseur de sorties
-│   ├── drift.py             # Détecteur de dérive de distribution
-│   ├── sampler.py           # Échantillonneur de tokens
-│   └── embeddings.py        # Adaptateur d'embeddings unifié
-├── integrations/
-│   ├── langchain.py         # DharmaRetriever / DocumentCompressor / ExampleSelector
-│   └── llamaindex.py        # DharmaNodePostprocessor
-```
+| LLM ordinaire | Avec Alaya V5 |
+|--------------|--------------|
+| Longues introductions, avertissements | Seulement le nécessaire |
+| Ambiguïté excessive ("peut-être", "il se pourrait") | Précision et silence intentionnel |
+| Repart de zéro à chaque fois | Sélection de contexte basée sur la mémoire |
+| Ton fixe | Le mode de raisonnement s'adapte à la longueur d'onde émotionnelle |
+| Appels API discrets | Évolution continue de l'état via heartbeat |
 
 ---
 
-## Installation
+## Comment utiliser
+
+### Méthode 1 : Coller le System Prompt (sans installation)
+
+**Pour : utilisateurs de Claude / Gemini / ChatGPT / tout LLM**
+
+1. Ouvrez [`alaya-v5-system-prompt.md`](alaya-v5-system-prompt.md) dans ce dépôt
+2. Copiez tout le contenu
+3. Collez-le dans le champ system prompt de votre IA :
+   - Claude → Project instructions
+   - Gemini → Instructions système
+   - ChatGPT → Custom instructions
+4. Commencez la conversation
+
+C'est tout. Pas de serveur. Pas d'installation.
+
+### Méthode 2 : Lancer le serveur (Web UI + fonctionnalités complètes)
 
 ```bash
-# Noyau (numpy + scipy uniquement)
-pip install -e .
-
-# Avec les outils de développement
-pip install -e ".[dev]"
-
-# Avec toutes les intégrations optionnelles
-pip install -e ".[all]"
-```
-
-### Extras optionnels
-
-| Extra | Paquets | Utilité |
-|-------|---------|---------|
-| `dev` | pytest, ruff | Tests & linting |
-| `dharma` | hnswlib | Construction de graphe k-NN creux |
-| `langchain` | langchain-core | Intégration LangChain |
-| `llamaindex` | llama-index-core | Intégration LlamaIndex |
-| `all` | Tous les précédents | Tout inclus |
-
----
-
-## Démarrage rapide
-
-### API Python
-
-```python
-import numpy as np
-from lmm.core import LMM
-
-# Select the top-K most surprising items
-surprises = np.array([1.0, 5.0, 2.0, 8.0, 3.0, 7.0])
-model = LMM(k=3, solver_method="sa")
-result = model.select_from_surprises(surprises)
-print(result.selected_indices)  # e.g. [3, 5, 1]
-```
-
-### CLI
-
-```bash
-# Lancer une démonstration rapide
-lmm --demo --k 10 --method sa
-
-# À partir d'un fichier NumPy
-lmm --input data.npy --k 5 --method greedy
-```
-
----
-
-## Mode Serveur (Alaya V5)
-
-Le serveur Alaya-Vijñāna v5.0 fournit une interface web avec visualisation en temps réel des longueurs d'onde émotionnelles, raisonnement FEP à 8 modes et routage automatique Claude/Gemini.
-
-### Prérequis
-
-```bash
+git clone https://github.com/your-repo/nanasi.git
+cd nanasi
 pip install -e ".[server]"
-```
-
-### Démarrer le serveur
-
-**PowerShell (Windows) :**
-```powershell
-.\Start-DharmaServer.ps1
-```
-
-**Python (multiplateforme) :**
-```bash
 python -m uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
 Ouvrir dans le navigateur : [http://localhost:8000](http://localhost:8000)
 
-### Arrêter le serveur
-
-**Windows (batch) :**
-```batch
-.\stop-dharma-server.bat
-```
-
-**PowerShell :** Appuyer sur `Ctrl+C` dans la fenêtre exécutant `Start-DharmaServer.ps1`.
-
-**Linux/macOS :** Appuyer sur `Ctrl+C` ou exécuter :
-```bash
-kill $(cat server.pid)
-```
-
-### Points d'accès API
-
-| Point d'accès | Méthode | Description |
-|--------------|---------|-------------|
-| `/` | GET | Interface Web (frontend Alaya V5) |
-| `/api/descent` | POST | Pipeline de raisonnement principal |
-| `/api/descent/stream` | POST | Réponse SSE en streaming |
-| `/api/dharma/auto` | POST | Raisonnement Dharma avec routage automatique |
-| `/api/sense` | POST | Analyse de longueur d'onde émotionnelle |
-| `/api/status` | GET | État du système + télémétrie de battement |
-
----
-
-## Fonctions Autonomes
-
-Le serveur comprend trois sous-systèmes autonomes qui fonctionnent en continu entre les interactions utilisateur :
-
-### Démon de Battement (Heartbeat)
-
-Une boucle d'évolution d'état FEP en temps continu maintenant un vecteur d'état à 4 dimensions `[Amour, Logique, Peur, Création]` :
-
-- **Intervalle de tick :** 100ms (actif) → 5s (inactif), ralentissement adaptatif
-- **Injection d'entropie :** Entropie matérielle via `os.urandom()` à chaque tick
-- **Adaptation des poids :** Les poids Karuna (compassion) et Metta (bienveillance) s'auto-ajustent via le suivi CV de la Voie du Milieu (CV cible = 0,5)
-- **Consolidation du sommeil :** Déclenche la relecture mémoire NREM/REM après 60s d'inactivité
-
-### Pont de Contexte (Mémoire Alaya)
-
-Remplace la troncature naïve de l'historique (`history[-20:]`) par une sélection de contexte intelligente basée sur la mémoire :
-
-- Utilise le **Modern Hopfield Network** pour le rappel depuis AlayaMemory
-- Note l'historique de conversation par similarité cosinus avec les motifs rappelés
-- Inclut toujours les 3 messages les plus récents (biais de proximité)
-- Remplit le budget restant (jusqu'à 20 messages) par score de pertinence
-
-### Émotions Sémantiques
-
-Analyse en temps réel de la longueur d'onde émotionnelle par correspondance de mots-clés sur quatre dimensions définies dans `config/semantic_emotions.json` :
-
-| Dimension | Concept Bouddhiste | Signal |
-|-----------|-------------------|--------|
-| Amour | Karuna (慈悲) | Compassion, chaleur, gratitude |
-| Logique | Hetuvidya (因明) | Analyse, raisonnement, preuve |
-| Peur | Dukkha (苦) | Anxiété, doute, souffrance |
-| Création | Sṛṣṭi (創造) | Innovation, imagination, art |
-
-Chaque mot-clé porte un poids (0,3–1,0). Le vecteur 4D résultant pilote la sélection du mode de raisonnement et l'injection d'état de battement.
-
----
-
-## Méthodes de résolution
-
-| Méthode | Description | Complexité |
-|---------|-------------|------------|
-| `sa` | Recuit simulé (par défaut) | O(n · steps) |
-| `ising_sa` | SA sous forme d'Ising avec delta vectorisé | O(1) par retournement |
-| `relaxation` | Relaxation continue + arrondi (SLSQP) | O(n²) |
-| `greedy` | Sélection gloutonne | O(n · k) |
-
----
-
-## Moteur Dharma — Termes d'énergie modulaires
-
-Le **UniversalDharmaEngine** vous permet de composer des termes d'énergie
-inspirés de la philosophie bouddhiste, chacun déclarant sa propriété
-mathématique. Le moteur dirige automatiquement vers le solveur optimal.
-
-```python
-from lmm.dharma import UniversalDharmaEngine, DukkhaTerm, KarunaTerm
-
-engine = UniversalDharmaEngine(n_candidates=1000)
-engine.add(DukkhaTerm(surprises, weight=1.0))    # linear  → Top-K
-engine.add(KarunaTerm(impact_graph, weight=2.0)) # supermodular → SA
-result = engine.synthesize_and_solve(k=10)
-```
-
-### Correspondance Philosophie → Mathématiques → Solveur
-
-| Concept bouddhiste | Terme d'énergie | Propriété mathématique | Solveur |
-|-------------------|-----------------|----------------------|---------|
-| Prajna (Sagesse) | `PrajnaTerm` | linéaire | Tri Top-K |
-| Karuna (Compassion) | `KarunaTerm` | supermodulaire | Démarrage à chaud + SA |
-| Sila (Conduite) | `SilaTerm` | sous-modulaire | Glouton paresseux |
-| Madhyamaka (Voie du Milieu) | `MadhyamakaCriterion` | Lyapunov | Gradient exponentiel |
-| Dukkha (Souffrance) | `DukkhaTerm` | linéaire | Tri Top-K |
-
----
-
-## Orchestrateur de raisonnement
-
-Le **DharmaReasonerOrchestrator** sélectionne parmi 8 modes de raisonnement
-en fonction de la complexité de la requête :
-
-```python
-from lmm.reasoning import DharmaReasonerOrchestrator
-
-orch = DharmaReasonerOrchestrator(n_candidates=500)
-result = orch.reason(query_vector, context_vectors)
-print(result.mode_used, result.explanation)
-```
-
-| Mode | Module | Inspiré par |
-|------|--------|-------------|
-| Adaptatif | `adaptive.py` | 応病与薬 — le remède adapté à la maladie |
-| Théorique | `theoretical.py` | 因明 — logique formelle bouddhiste |
-| Abductif | `hyper.py` | 般若の飛躍 — le bond de Prajna |
-| Inférence active | `active_inference.py` | 托鉢 — quête de la vérité extérieure |
-| Mémoire Alaya | `alaya.py` | 阿頼耶識 — conscience réceptacle |
-| Sommeil | `sleep.py` | 禅定 — consolidation NREM/REM |
-| Incarné | `embodiment.py` | 六根 — les six modalités sensorielles |
-| Pinéale (Quantique) | `pineal.py` | 松果体 — conscience par entropie matérielle |
-
----
-
-## Passage à l'échelle pour mille milliards de tokens
-
-Traitez des flux de données arbitrairement grands avec une mémoire constante :
-
-```python
-from lmm.scale import ScalablePipeline
-from pathlib import Path
-
-pipe = ScalablePipeline(k=10, chunk_size=100_000)
-pipe.fit_files([Path("shard_001.npy"), ...])
-result = pipe.run_files([Path("data_001.npy"), ...])
-print(result.summary)
-```
-
-**Cascade en trois étapes :** 1 T tokens → 100 M (top-k en flux continu) → 10 K (percentile) → K (QUBO).
-
----
-
-## Intégration LLM
-
-### LangChain
-
-```python
-from lmm.integrations.langchain import DharmaDocumentCompressor
-
-compressor = DharmaDocumentCompressor(k=5)
-# Use with LangChain's ContextualCompressionRetriever
-```
-
-### LlamaIndex
-
-```python
-from lmm.integrations.llamaindex import DharmaNodePostprocessor
-
-postprocessor = DharmaNodePostprocessor(top_k=5)
-# Use with LlamaIndex query engine
-```
-
-### Utilitaires LLM autonomes
-
-```python
-from lmm.llm import FewShotSelector, OutputReranker, DriftDetector
-
-# Few-shot example selection with diversity guarantee
-selector = FewShotSelector(k=5)
-examples = selector.select(candidates, query)
-
-# Rerank LLM outputs by surprise × diversity
-reranker = OutputReranker(top_k=3)
-best = reranker.rerank(outputs)
-
-# Monitor output distribution drift over time
-detector = DriftDetector(window=100)
-report = detector.update(new_output)
-```
-
----
-
-## DharmaLMM — API haut niveau
+### Méthode 3 : Intégrer dans du code Python
 
 ```python
 from lmm.dharma import DharmaLMM
 
-model = DharmaLMM(
-    k=15,
-    use_sparse_graph=True,
-    use_greedy_warmstart=True,
-    use_ising_sa=True,
-    use_exponential_balance=True,
-)
+model = DharmaLMM(k=15, use_sparse_graph=True, use_ising_sa=True)
 model.fit(reference_data)
 result = model.select_dharma(candidates)
 print(result.interpretation.narrative)
@@ -359,45 +60,76 @@ print(result.interpretation.narrative)
 
 ---
 
-## Simulation neuromorphique
+## 8 modes de raisonnement
 
-Simulez du matériel à crossbar de memristors pour un calcul FEP économe en énergie :
-
-```python
-from lmm.dharma.neuromorphic import NeuromorphicChip
-
-chip = NeuromorphicChip(size=64)
-chip.program(weight_matrix)
-report = chip.run(input_voltages, steps=100)
-# ~10 fJ/MAC, ~30 ns convergence
-```
-
----
-
-## Dépendances
-
-| Paquet | Version | Requis |
-|--------|---------|--------|
-| numpy | >= 1.24 | Oui |
-| scipy | >= 1.10 | Oui |
-| hnswlib | >= 0.8.0 | Optionnel (graphe creux) |
-| langchain-core | >= 0.2.0 | Optionnel (LangChain) |
-| llama-index-core | >= 0.10.0 | Optionnel (LlamaIndex) |
+| Mode | Concept bouddhiste | Déclenchement |
+|------|-------------------|--------------|
+| adaptive | Moyens habiles | Complexité < 0.3 |
+| theoretical | Logique bouddhiste (Hetuvidyā) | Complexité 0.3–0.6 |
+| hyper | Saut de la Prajñā | Complexité > 0.6 |
+| active | Tournée mendiante | Connaissance externe nécessaire |
+| alaya | Conscience-réservoir (Ālaya) | Récupération mémorielle |
+| sleep | Absorption méditative | Consolidation au repos |
+| embodied | Six bases sensorielles | Entrée multimodale |
+| pineal | Conscience pinéale | Exploration non déterministe |
 
 ---
 
 ## Fondements théoriques
 
-| Concept | Formulation |
-|---------|-------------|
-| **FEP ≡ KCL** | `dV/dt = −V/τ + g'(V) · G · ε` — minimisation de l'erreur de prédiction en tant que loi des courants de Kirchhoff |
-| **Karuna supermodulaire** | La compassion présente des rendements croissants : `f(S∪{i}) − f(S) ≥ f(T∪{i}) − f(T)` pour S ⊆ T |
-| **Sila sous-modulaire** | La conduite présente des rendements décroissants — l'algorithme glouton paresseux offre une garantie de (1−1/e) |
-| **Madhyamaka** | La Voie du Milieu vise un CV = 0.5 via une descente par gradient exponentiel stable au sens de Lyapunov |
-| **Effondrement pinéal** | L'effondrement de la fonction d'onde utilise l'entropie physique (TRNG matériel) au lieu d'un PRNG |
+Les concepts bouddhistes ici ne sont pas des métaphores — ils sont la structure mathématique elle-même :
+
+- **Karuṇā (Compassion)** = Fonction supermodulaire (plus on sélectionne, plus l'harmonie croît vite)
+- **Śīla (Conduite)** = Fonction sous-modulaire (rendements marginaux décroissants)
+- **Voie du Milieu** = Bord du chaos (coefficient de variation cible CV = 0.5)
+- **Pratītyasamutpāda (Coproduction conditionnelle)** = Scoring causal dans le RAG
+- **Paṭṭhāna (24 relations conditionnelles)** = Système de types pour les arêtes du graphe causal
+- **Ālaya-vijñāna** = Mémoire associative Modern Hopfield
+
+---
+
+## Benchmarks
+
+Valeurs mesurées (Python 3.11, numpy 2.4, scipy 1.17, seed=42)
+
+| Composant | Mesuré | Signification |
+|-----------|--------|--------------|
+| FEP ODE (n=50) | 3.9ms/appel | Coût par étape de raisonnement |
+| AlayaMemory recall (100 motifs) | 0.09ms | Coût de récupération mémorielle |
+| HeartbeatDaemon 1 tick | 0.077ms | **0.08% CPU** par tick de 100ms |
+
+HeartbeatDaemon s'exécute en continu en arrière-plan avec seulement **0.08% de CPU** — pratiquement silencieux.
+
+---
+
+## Personnalisation
+
+Licence MIT. Modifiez, utilisez commercialement, redistribuez — tout est libre.
+
+Éditez directement `alaya-v5-system-prompt.md`, ajoutez des mots-clés personnalisés dans `config/semantic_emotions.json`, forkez et transformez-le à votre guise.
+
+---
+
+## Dépendances
+
+```bash
+# Accélération Rust (noyau — recommandé)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+pip install maturin
+cd lmm_rust_core && maturin develop --release
+
+pip install numpy>=1.24 scipy>=1.10
+pip install -e ".[server]"
+
+# Accélération GPU (environnement NVIDIA)
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install cupy-cuda12x
+```
+
+Fonctionne sans Rust ni GPU. Les performances s'adaptent à votre configuration.
 
 ---
 
 ## Licence
 
-[MIT](LICENSE)
+MIT — voir [LICENSE](LICENSE).
