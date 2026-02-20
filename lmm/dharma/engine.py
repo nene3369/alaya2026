@@ -288,15 +288,28 @@ class UniversalDharmaEngine:
 
     def _solve_fep_analog(self, h, J, k, sila_gamma=0.0):
         V_s = -h.copy()
-        if sila_gamma > 0:
-            V_s -= sila_gamma * (self.n - 2 * k)
         J_dyn = J * (-1.0) if J.nnz > 0 else J
         density = J.nnz / max(self.n * self.n, 1)
         G_prec = max(5.0, 10.0 * (1.0 - density))
 
-        V_mu, x_final, steps, _ = solve_fep_kcl_analog(
-            V_s=V_s, J_dynamic=J_dyn, n=self.n, G_prec_base=G_prec,
-        )
+        # Dynamic Sila フィードバックループ:
+        # デジタルFEPが毎ステップ発火数に応じてペナルティを動的計算するのに対し、
+        # アナログFEPはV_sが固定のため静的補正しかできない。
+        # そこで外部ループで「実際の発火数の過不足」を V_s に反映し、
+        # 最大3回の反復補正で定員 k を動的に実現する。
+        x_final = None
+        n_iters = 3 if sila_gamma > 0 else 1
+        for _ in range(n_iters):
+            V_mu, x_final, steps, _ = solve_fep_kcl_analog(
+                V_s=V_s, J_dynamic=J_dyn, n=self.n, G_prec_base=G_prec,
+            )
+            if sila_gamma > 0:
+                excess = float(x_final.sum()) - k
+                if abs(excess) < 0.5:
+                    break
+                # 過剰発火 → V_s を下げて抑制 / 不足 → V_s を上げて促進
+                V_s -= sila_gamma * excess
+
         top_k = np.argsort(-x_final)[:k]
         selected = np.array(sorted(int(i) for i in top_k))
         return selected, self._eval(h, J, sila_gamma, selected), "fep_kcl_analog"

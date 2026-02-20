@@ -220,7 +220,7 @@ class StreamingHistogram:
                 hist_counts, edges = np.histogram(
                     arr, bins=n_hist_bins, range=(arr_min, arr_max),
                 )
-            except TypeError:
+            except (TypeError, ValueError):
                 hist_counts, edges = np.histogram(arr, bins=n_hist_bins)
             centers = (edges[:-1] + edges[1:]) * 0.5
             new_bins = [

@@ -10,6 +10,7 @@ concrete external actions.  Each execution cycle:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from typing import Any, Dict, List
 
@@ -133,7 +134,7 @@ class ToolExecutor:
             else:
                 # Hash-based distribution: spread effect across nodes
                 content = str(r.output)
-                h = hash(content) & 0xFFFFFFFF
+                h = int(hashlib.md5(content.encode("utf-8", errors="replace")).hexdigest(), 16) % (2 ** 32)
                 n_affected = max(1, n_variables // 8)
                 rng = np.random.RandomState(h)
                 indices = rng.choice(n_variables, size=n_affected, replace=False)
