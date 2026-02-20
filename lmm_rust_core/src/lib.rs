@@ -409,6 +409,10 @@ fn solve_submodular_greedy_rust<'py>(
     let actual_k = k.min(n);
     let has_graph = !data.is_empty();
 
+    if has_graph && indptr.len() < n + 1 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("csr_indptr length mismatch"));
+    }
+
     // Copy to owned Vecs for GIL release
     let surp_owned: Vec<f64> = surp.to_vec();
     let data_owned: Vec<f64> = data.to_vec();
@@ -419,8 +423,8 @@ fn solve_submodular_greedy_rust<'py>(
         let mut row_sums = vec![0.0; n];
         if has_graph {
             for i in 0..n {
-                let start = indptr_owned[i] as usize;
-                let end = indptr_owned[i + 1] as usize;
+                let start = (indptr_owned[i] as usize).min(data_owned.len());
+                let end = (indptr_owned[i + 1] as usize).min(data_owned.len()).max(start);
                 for j in start..end {
                     row_sums[i] += data_owned[j];
                 }
@@ -429,7 +433,8 @@ fn solve_submodular_greedy_rust<'py>(
 
         let mut pq = BinaryHeap::with_capacity(n);
         for i in 0..n {
-            let gain = alpha * surp_owned[i] + beta * row_sums[i];
+            let mut gain = alpha * surp_owned[i] + beta * row_sums[i];
+            if gain.is_nan() { gain = 0.0; }
             pq.push(CelfNode { id: i, gain: OrderedFloat(gain), iteration: 0 });
         }
 
@@ -441,9 +446,8 @@ fn solve_submodular_greedy_rust<'py>(
 
         while selected.len() < actual_k && !pq.is_empty() {
             let mut top = pq.pop().unwrap();
-            if top.gain.into_inner() <= 0.0 {
-                break;
-            }
+            if top.gain.into_inner() == std::f64::NEG_INFINITY { break; }
+            if top.gain.into_inner() <= 0.0 && !selected.is_empty() { break; }
 
             if top.iteration == current_iter {
                 selected.push(top.id as i64);
@@ -454,15 +458,18 @@ fn solve_submodular_greedy_rust<'py>(
             } else {
                 let mut new_gain = alpha * surp_owned[top.id] + beta * row_sums[top.id];
                 if has_graph {
-                    let start = indptr_owned[top.id] as usize;
-                    let end = indptr_owned[top.id + 1] as usize;
+                    let start = (indptr_owned[top.id] as usize).min(data_owned.len());
+                    let end = (indptr_owned[top.id + 1] as usize).min(data_owned.len()).max(start);
                     for ptr in start..end {
-                        let neighbor = indices_owned[ptr] as usize;
-                        if selected_mask[neighbor] {
-                            new_gain -= 2.0 * beta * data_owned[ptr];
+                        if ptr < indices_owned.len() {
+                            let neighbor = indices_owned[ptr] as usize;
+                            if neighbor < n && selected_mask[neighbor] {
+                                new_gain -= 2.0 * beta * data_owned[ptr];
+                            }
                         }
                     }
                 }
+                if new_gain.is_nan() { new_gain = 0.0; }
                 top.gain = OrderedFloat(new_gain);
                 top.iteration = current_iter;
                 pq.push(top);
@@ -488,6 +495,9 @@ fn ngram_vectors_rust<'py>(
     let n = texts.len();
     if n == 0 {
         return Ok(ndarray::Array2::<f64>::zeros((0, max_features)).into_pyarray(py));
+    }
+    if max_features == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("max_features must be > 0"));
     }
 
     let mut out_flat = vec![0.0; n * max_features];
@@ -517,7 +527,7 @@ fn ngram_vectors_rust<'py>(
                 for c in &counts {
                     norm_sq += c * c;
                 }
-                let norm = if norm_sq > 1e-10 { norm_sq.sqrt() } else { 1.0 };
+                let norm = norm_sq.sqrt().max(1e-10);
                 for i in 0..max_features {
                     row[i] = counts[i] / norm;
                 }
@@ -540,6 +550,11 @@ fn bfs_components_rust(
 ) -> PyResult<Vec<Vec<i32>>> {
     let i_arr = csr_indices.as_slice()?;
     let p_arr = csr_indptr.as_slice()?;
+
+    if p_arr.len() < n + 1 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("csr_indptr length mismatch"));
+    }
+
     let mut visited = vec![false; n];
     let mut components = Vec::new();
 
@@ -553,11 +568,11 @@ fn bfs_components_rust(
         visited[start] = true;
         while let Some(node) = queue.pop_front() {
             comp.push(node as i32);
-            let s = p_arr[node] as usize;
-            let e = p_arr[node + 1] as usize;
+            let s = (p_arr[node] as usize).min(i_arr.len());
+            let e = (p_arr[node + 1] as usize).min(i_arr.len()).max(s);
             for ptr in s..e {
                 let nb = i_arr[ptr] as usize;
-                if !visited[nb] {
+                if nb < n && !visited[nb] {
                     visited[nb] = true;
                     queue.push_back(nb);
                 }
@@ -578,6 +593,11 @@ fn bfs_reverse_rust(
 ) -> PyResult<(Vec<i32>, usize)> {
     let i_arr = csr_indices.as_slice()?;
     let p_arr = csr_indptr.as_slice()?;
+
+    if p_arr.len() < n + 1 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("csr_indptr length mismatch"));
+    }
+
     let mut visited = vec![false; n];
     let mut queue = VecDeque::new();
     let mut max_depth = 0;
@@ -590,11 +610,11 @@ fn bfs_reverse_rust(
     }
 
     while let Some((node, depth)) = queue.pop_front() {
-        let s = p_arr[node] as usize;
-        let e = p_arr[node + 1] as usize;
+        let s = (p_arr[node] as usize).min(i_arr.len());
+        let e = (p_arr[node + 1] as usize).min(i_arr.len()).max(s);
         for ptr in s..e {
             let nb = i_arr[ptr] as usize;
-            if !visited[nb] {
+            if nb < n && !visited[nb] {
                 visited[nb] = true;
                 if depth + 1 > max_depth {
                     max_depth = depth + 1;
