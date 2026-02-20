@@ -247,7 +247,8 @@ def run_submodular_greedy(
     """Run submodular lazy greedy (CELF), preferring Rust."""
     if _HAS_RUST:
         try:
-            csr_d, csr_i, csr_p = _csr_parts(csr)
+            csr_obj = csr.tocsr() if hasattr(csr, "tocsr") else csr
+            csr_d, csr_i, csr_p = _csr_parts(csr_obj)
             sel, obj, gains = _rc.solve_submodular_greedy_rust(
                 np.asarray(surprises, dtype=np.float64),
                 csr_d, csr_i, csr_p,
@@ -293,7 +294,8 @@ def run_bfs_components(
     """Run BFS connected-component detection, preferring Rust."""
     if _HAS_RUST:
         try:
-            _, csr_i, csr_p = _csr_parts(csr)
+            csr_obj = csr.tocsr() if hasattr(csr, "tocsr") else csr
+            _, csr_i, csr_p = _csr_parts(csr_obj)
             return _rc.bfs_components_rust(n, csr_i, csr_p)
         except Exception:
             pass
@@ -314,7 +316,9 @@ def run_bfs_reverse(
     """Run BFS reverse traversal on transposed graph, preferring Rust."""
     if _HAS_RUST:
         try:
-            _, csr_i, csr_p = _csr_parts(csr_T)
+            # SciPy .T returns csc_matrix; must convert to CSR for correct traversal
+            csr_obj = csr_T.tocsr() if hasattr(csr_T, "tocsr") else csr_T
+            _, csr_i, csr_p = _csr_parts(csr_obj)
             return _rc.bfs_reverse_rust(n, start_indices, csr_i, csr_p)
         except Exception:
             pass
