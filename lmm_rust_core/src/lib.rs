@@ -24,10 +24,16 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
+use std::collections::{BinaryHeap, VecDeque};
+use std::cmp::Ordering;
+
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1};
 use pyo3::prelude::*;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
+use rayon::prelude::*;
+use crc32fast::Hasher;
+use ordered_float::OrderedFloat;
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  1.  Ising Simulated Annealing
@@ -369,6 +375,246 @@ fn solve_fep_analog_rust<'py>(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+//  3.  Submodular Lazy Greedy (CELF)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[derive(Clone, Copy)]
+struct CelfNode {
+    id: usize,
+    gain: OrderedFloat<f64>,
+    iteration: usize,
+}
+impl PartialEq for CelfNode { fn eq(&self, other: &Self) -> bool { self.gain == other.gain } }
+impl Eq for CelfNode {}
+impl PartialOrd for CelfNode { fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) } }
+impl Ord for CelfNode { fn cmp(&self, other: &Self) -> Ordering { self.gain.cmp(&other.gain) } }
+
+#[pyfunction]
+#[pyo3(signature = (surprises, csr_data, csr_indices, csr_indptr, k, alpha, beta))]
+fn solve_submodular_greedy_rust<'py>(
+    py: Python<'py>,
+    surprises: PyReadonlyArray1<'py, f64>,
+    csr_data: PyReadonlyArray1<'py, f64>,
+    csr_indices: PyReadonlyArray1<'py, i32>,
+    csr_indptr: PyReadonlyArray1<'py, i32>,
+    k: usize,
+    alpha: f64,
+    beta: f64,
+) -> PyResult<(Bound<'py, PyArray1<i64>>, f64, Bound<'py, PyArray1<f64>>)> {
+    let surp = surprises.as_slice()?;
+    let data = csr_data.as_slice()?;
+    let indices = csr_indices.as_slice()?;
+    let indptr = csr_indptr.as_slice()?;
+    let n = surp.len();
+    let actual_k = k.min(n);
+    let has_graph = !data.is_empty();
+
+    // Copy to owned Vecs for GIL release
+    let surp_owned: Vec<f64> = surp.to_vec();
+    let data_owned: Vec<f64> = data.to_vec();
+    let indices_owned: Vec<i32> = indices.to_vec();
+    let indptr_owned: Vec<i32> = indptr.to_vec();
+
+    let (sel, obj, gains) = py.allow_threads(move || {
+        let mut row_sums = vec![0.0; n];
+        if has_graph {
+            for i in 0..n {
+                let start = indptr_owned[i] as usize;
+                let end = indptr_owned[i + 1] as usize;
+                for j in start..end {
+                    row_sums[i] += data_owned[j];
+                }
+            }
+        }
+
+        let mut pq = BinaryHeap::with_capacity(n);
+        for i in 0..n {
+            let gain = alpha * surp_owned[i] + beta * row_sums[i];
+            pq.push(CelfNode { id: i, gain: OrderedFloat(gain), iteration: 0 });
+        }
+
+        let mut selected = Vec::with_capacity(actual_k);
+        let mut selected_mask = vec![false; n];
+        let mut gains_history = Vec::with_capacity(actual_k);
+        let mut total_value = 0.0;
+        let mut current_iter = 0;
+
+        while selected.len() < actual_k && !pq.is_empty() {
+            let mut top = pq.pop().unwrap();
+            if top.gain.into_inner() <= 0.0 {
+                break;
+            }
+
+            if top.iteration == current_iter {
+                selected.push(top.id as i64);
+                selected_mask[top.id] = true;
+                total_value += top.gain.into_inner();
+                gains_history.push(top.gain.into_inner());
+                current_iter += 1;
+            } else {
+                let mut new_gain = alpha * surp_owned[top.id] + beta * row_sums[top.id];
+                if has_graph {
+                    let start = indptr_owned[top.id] as usize;
+                    let end = indptr_owned[top.id + 1] as usize;
+                    for ptr in start..end {
+                        let neighbor = indices_owned[ptr] as usize;
+                        if selected_mask[neighbor] {
+                            new_gain -= 2.0 * beta * data_owned[ptr];
+                        }
+                    }
+                }
+                top.gain = OrderedFloat(new_gain);
+                top.iteration = current_iter;
+                pq.push(top);
+            }
+        }
+
+        (selected, total_value, gains_history)
+    });
+
+    Ok((sel.into_pyarray(py), obj, gains.into_pyarray(py)))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  4.  N-gram Hash Vectorization (Rayon Multi-threading)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[pyfunction]
+fn ngram_vectors_rust<'py>(
+    py: Python<'py>,
+    texts: Vec<String>,
+    max_features: usize,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let n = texts.len();
+    if n == 0 {
+        return Ok(ndarray::Array2::<f64>::zeros((0, max_features)).into_pyarray(py));
+    }
+
+    let mut out_flat = vec![0.0; n * max_features];
+
+    py.allow_threads(|| {
+        out_flat
+            .par_chunks_mut(max_features)
+            .zip(texts.par_iter())
+            .for_each(|(row, text)| {
+                let lower = text.to_lowercase();
+                let bytes = lower.as_bytes();
+                let len = bytes.len();
+                let mut counts = vec![0.0; max_features];
+
+                for &ng in &[3usize, 4, 5] {
+                    if len >= ng {
+                        for j in 0..=(len - ng) {
+                            let mut hasher = Hasher::new();
+                            hasher.update(&bytes[j..j + ng]);
+                            let hash = hasher.finalize() as usize;
+                            counts[hash % max_features] += 1.0;
+                        }
+                    }
+                }
+
+                let mut norm_sq = 0.0;
+                for c in &counts {
+                    norm_sq += c * c;
+                }
+                let norm = if norm_sq > 1e-10 { norm_sq.sqrt() } else { 1.0 };
+                for i in 0..max_features {
+                    row[i] = counts[i] / norm;
+                }
+            });
+    });
+
+    let arr2 = ndarray::Array2::from_shape_vec((n, max_features), out_flat).unwrap();
+    Ok(arr2.into_pyarray(py))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  5.  Graph Topology Analysis (BFS)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[pyfunction]
+fn bfs_components_rust(
+    n: usize,
+    csr_indices: PyReadonlyArray1<i32>,
+    csr_indptr: PyReadonlyArray1<i32>,
+) -> PyResult<Vec<Vec<i32>>> {
+    let i_arr = csr_indices.as_slice()?;
+    let p_arr = csr_indptr.as_slice()?;
+    let mut visited = vec![false; n];
+    let mut components = Vec::new();
+
+    for start in 0..n {
+        if visited[start] {
+            continue;
+        }
+        let mut comp = Vec::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(start);
+        visited[start] = true;
+        while let Some(node) = queue.pop_front() {
+            comp.push(node as i32);
+            let s = p_arr[node] as usize;
+            let e = p_arr[node + 1] as usize;
+            for ptr in s..e {
+                let nb = i_arr[ptr] as usize;
+                if !visited[nb] {
+                    visited[nb] = true;
+                    queue.push_back(nb);
+                }
+            }
+        }
+        components.push(comp);
+    }
+
+    Ok(components)
+}
+
+#[pyfunction]
+fn bfs_reverse_rust(
+    n: usize,
+    start_indices: Vec<usize>,
+    csr_indices: PyReadonlyArray1<i32>,
+    csr_indptr: PyReadonlyArray1<i32>,
+) -> PyResult<(Vec<i32>, usize)> {
+    let i_arr = csr_indices.as_slice()?;
+    let p_arr = csr_indptr.as_slice()?;
+    let mut visited = vec![false; n];
+    let mut queue = VecDeque::new();
+    let mut max_depth = 0;
+
+    for &idx in &start_indices {
+        if idx < n {
+            visited[idx] = true;
+            queue.push_back((idx, 0));
+        }
+    }
+
+    while let Some((node, depth)) = queue.pop_front() {
+        let s = p_arr[node] as usize;
+        let e = p_arr[node + 1] as usize;
+        for ptr in s..e {
+            let nb = i_arr[ptr] as usize;
+            if !visited[nb] {
+                visited[nb] = true;
+                if depth + 1 > max_depth {
+                    max_depth = depth + 1;
+                }
+                queue.push_back((nb, depth + 1));
+            }
+        }
+    }
+
+    let mut reachable = Vec::new();
+    for j in 0..n {
+        if visited[j] && !start_indices.contains(&j) {
+            reachable.push(j as i32);
+        }
+    }
+
+    Ok((reachable, max_depth))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 //  Module registration
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -376,5 +622,9 @@ fn solve_fep_analog_rust<'py>(
 fn lmm_rust_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_sa_ising_rust, m)?)?;
     m.add_function(wrap_pyfunction!(solve_fep_analog_rust, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_submodular_greedy_rust, m)?)?;
+    m.add_function(wrap_pyfunction!(ngram_vectors_rust, m)?)?;
+    m.add_function(wrap_pyfunction!(bfs_components_rust, m)?)?;
+    m.add_function(wrap_pyfunction!(bfs_reverse_rust, m)?)?;
     Ok(())
 }

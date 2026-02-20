@@ -23,7 +23,7 @@ from scipy.optimize import minimize
 
 from lmm._compat import HAS_ARGPARTITION, sparse_matvec, sparse_row_scatter
 from lmm.qubo import QUBOBuilder
-from lmm.rust_bridge import run_sa_ising_loop
+from lmm.rust_bridge import run_sa_ising_loop, run_submodular_greedy
 
 SolverMethod = Literal["sa", "ising_sa", "greedy", "relaxation"]
 
@@ -316,57 +316,76 @@ class SubmodularSelector:
         is_sparse = impact_graph is not None and sparse.issparse(impact_graph)
         has_graph = impact_graph is not None
 
-        marginal = self.alpha * surprises.copy()
-        if has_graph:
-            row_sums = (np.asarray(impact_graph.sum(axis=1)).flatten()
-                        if is_sparse else impact_graph.sum(axis=1))
-            marginal += self.beta * row_sums
-
-        selected: list[int] = []
-        mask = np.ones(n, dtype=bool)
-        gains_history: list[float] = []
-        total_value = 0.0
-        INF = float('inf')
-        masked = marginal.copy()
-
-        for _ in range(k):
-            best = int(np.argmax(masked))
-            if float(masked[best]) <= 0 and selected:
-                break
-            if float(masked[best]) <= -INF:
-                break
-            gains_history.append(float(masked[best]))
-            total_value += float(masked[best])
-            selected.append(best)
-            mask[best] = False
-            masked[best] = -INF
-
+        def _fallback():
+            marginal = self.alpha * surprises.copy()
             if has_graph:
-                if is_sparse:
-                    col = (impact_graph.T.getrow(best)
-                           if hasattr(impact_graph.T, 'getrow') else None)
-                    if col is not None:
-                        for idx, w in zip(col.indices, col.data):
-                            if mask[idx]:
-                                marginal[idx] -= 2.0 * self.beta * w
-                                masked[idx] -= 2.0 * self.beta * w
-                    else:
-                        row = impact_graph.getrow(best)
-                        for idx, w in zip(row.indices, row.data):
-                            if mask[idx]:
-                                marginal[idx] -= 2.0 * self.beta * w
-                                masked[idx] -= 2.0 * self.beta * w
-                else:
-                    d = 2.0 * self.beta * np.asarray(impact_graph[best]).flatten()
-                    update = d * mask
-                    marginal -= update
-                    masked -= update
+                row_sums = (np.asarray(impact_graph.sum(axis=1)).flatten()
+                            if is_sparse else impact_graph.sum(axis=1))
+                marginal += self.beta * row_sums
 
-        return SubmodularResult(
-            selected_indices=np.array(selected, dtype=int),
-            objective_value=total_value,
-            marginal_gains=np.array(gains_history),
-        )
+            selected: list[int] = []
+            mask = np.ones(n, dtype=bool)
+            gains_history: list[float] = []
+            total_value = 0.0
+            INF = float('inf')
+            masked = marginal.copy()
+
+            for _ in range(k):
+                best = int(np.argmax(masked))
+                if float(masked[best]) <= 0 and selected:
+                    break
+                if float(masked[best]) <= -INF:
+                    break
+                gains_history.append(float(masked[best]))
+                total_value += float(masked[best])
+                selected.append(best)
+                mask[best] = False
+                masked[best] = -INF
+
+                if has_graph:
+                    if is_sparse:
+                        col = (impact_graph.T.getrow(best)
+                               if hasattr(impact_graph.T, 'getrow') else None)
+                        if col is not None:
+                            for idx, w in zip(col.indices, col.data):
+                                if mask[idx]:
+                                    marginal[idx] -= 2.0 * self.beta * w
+                                    masked[idx] -= 2.0 * self.beta * w
+                        else:
+                            row = impact_graph.getrow(best)
+                            for idx, w in zip(row.indices, row.data):
+                                if mask[idx]:
+                                    marginal[idx] -= 2.0 * self.beta * w
+                                    masked[idx] -= 2.0 * self.beta * w
+                    else:
+                        d = 2.0 * self.beta * np.asarray(impact_graph[best]).flatten()
+                        update = d * mask
+                        marginal -= update
+                        masked -= update
+
+            return SubmodularResult(
+                selected_indices=np.array(selected, dtype=int),
+                objective_value=total_value,
+                marginal_gains=np.array(gains_history),
+            )
+
+        # Delegate to Rust when impact_graph is sparse CSR
+        if is_sparse:
+            def _tuple_fallback():
+                r = _fallback()
+                return r.selected_indices, r.objective_value, r.marginal_gains
+
+            sel, obj, gains = run_submodular_greedy(
+                surprises, impact_graph, k, self.alpha, self.beta,
+                _fallback=_tuple_fallback,
+            )
+            return SubmodularResult(
+                selected_indices=np.asarray(sel, dtype=int),
+                objective_value=float(obj),
+                marginal_gains=np.asarray(gains),
+            )
+
+        return _fallback()
 
     def select_lazy(
         self,
