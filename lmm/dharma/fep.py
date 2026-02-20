@@ -22,6 +22,7 @@ import numpy as np
 from scipy import sparse
 
 from lmm._compat import HAS_FEP_FAST_PATH, HAS_CUPY, sparse_matvec as _default_sparse_matvec
+from lmm.rust_bridge import run_fep_analog_loop, has_rust_core
 
 
 def solve_fep_kcl(
@@ -343,6 +344,28 @@ def solve_fep_kcl_analog(
         J_scale = 1.0 / (1.0 + max_row_sum) if max_row_sum > 0 else 1.0
     else:
         J_scale = 1.0
+
+    # Rust path: fastest backend when lmm_rust_core is available
+    if has_rust_core() and sparse_matvec is None:
+        v_init = initial_state.copy() if initial_state is not None else np.zeros(n)
+
+        def _python_fallback():
+            r = _solve_analog_vectorized(
+                V_s, J_dynamic, n,
+                G_prec_base=G_prec_base, tau_leak=tau_leak, dt=dt,
+                max_steps=max_steps, nirvana_threshold=nirvana_threshold,
+                initial_state=initial_state, J_scale=J_scale,
+            )
+            # run_fep_analog_loop expects (V_final, steps, power_history)
+            return r[0], r[2], r[3]
+
+        V_out, steps, ph = run_fep_analog_loop(
+            v_init, V_s, n, G_prec_base, tau_leak, dt, max_steps,
+            nirvana_threshold, J_scale, J_dynamic,
+            _fallback=_python_fallback,
+        )
+        x_final = (np.tanh(V_out) + 1.0) * 0.5
+        return V_out, x_final, steps, ph
 
     if HAS_CUPY and sparse_matvec is None:
         return _solve_analog_gpu(

@@ -23,6 +23,7 @@ from scipy.optimize import minimize
 
 from lmm._compat import HAS_ARGPARTITION, sparse_matvec, sparse_row_scatter
 from lmm.qubo import QUBOBuilder
+from lmm.rust_bridge import run_sa_ising_loop
 
 SolverMethod = Literal["sa", "ising_sa", "greedy", "relaxation"]
 
@@ -162,40 +163,55 @@ class ClassicalQUBOSolver:
         csr = self.qubo._build_offdiag_csr()
         gamma = self.qubo._cardinality_gamma
 
+        # Correct QUBO→Ising linear bias: h_i = Q_ii/2 + rowsum_i/2
+        # CSR is fully symmetric (weight/2 on both [i,j] and [j,i]).
         csr_rowsum = (np.asarray(csr.sum(axis=1)).flatten()
                       if csr.nnz > 0 else np.zeros(n))
-        h = diag / 2.0 + (diag + csr_rowsum + (n - 1) * gamma) / 4.0
+        h = diag / 2.0 + (csr_rowsum + (n - 1) * gamma) / 2.0
 
         s = ((2.0 * initial_state - 1.0).copy() if initial_state is not None
              else rng.choice([-1.0, 1.0], size=n))
 
+        # Off-diagonal coupling sum (no self-interaction from diag)
         sum_s = float(np.sum(s))
-        Js = diag * s
+        Js = np.zeros(n)
         if csr.nnz > 0:
-            Js = Js + np.asarray(sparse_matvec(csr, s)).flatten()
+            Js = np.asarray(sparse_matvec(csr, s)).flatten()
         Js = Js + gamma * (sum_s - s)
-        Js /= 4.0
-        local_field = h + 2.0 * Js
 
-        energy = float(np.dot(s, Js) + np.dot(h, s))
+        # local_field = h + Js/2;  energy = h·s + s·Js/4
+        local_field = h + Js / 2.0
+        energy = float(np.dot(h, s) + np.dot(s, Js) / 4.0)
         best_s, best_energy = s.copy(), energy
-        temp_ratio = temp_end / temp_start
 
-        for step in range(n_iterations):
-            temp = temp_start * temp_ratio ** (step / n_iterations)
-            idx = rng.integers(0, n)
-            delta_e = -2.0 * s[idx] * local_field[idx]
+        # Delegate to Rust if available, else Python fallback
+        def _python_sa_loop():
+            nonlocal s, local_field, energy, best_s, best_energy, sum_s
+            temp_ratio = temp_end / temp_start
+            for step in range(n_iterations):
+                temp = temp_start * temp_ratio ** (step / n_iterations)
+                idx = rng.integers(0, n)
+                delta_e = -2.0 * s[idx] * local_field[idx]
 
-            if delta_e < 0 or rng.random() < np.exp(-delta_e / max(temp, 1e-15)):
-                s[idx] *= -1.0
-                energy += delta_e
-                sum_s += 2.0 * s[idx]
-                local_field += gamma * s[idx]
-                local_field[idx] += (diag[idx] - gamma) * s[idx]
-                if csr.nnz > 0:
-                    sparse_row_scatter(csr, int(idx), local_field, float(s[idx]))
-                if energy < best_energy:
-                    best_energy, best_s = energy, s.copy()
+                if delta_e < 0 or rng.random() < np.exp(-delta_e / max(temp, 1e-15)):
+                    s[idx] *= -1.0
+                    energy += delta_e
+                    sum_s += 2.0 * s[idx]
+                    # All-to-all cardinality broadcast
+                    local_field += gamma * s[idx]
+                    # Self-correction: cancel broadcast at idx (no self-interaction)
+                    local_field[idx] -= gamma * s[idx]
+                    if csr.nnz > 0:
+                        sparse_row_scatter(csr, int(idx), local_field, float(s[idx]))
+                    if energy < best_energy:
+                        best_energy, best_s = energy, s.copy()
+            return best_s
+
+        best_s = run_sa_ising_loop(
+            n, n_iterations, temp_start, temp_end, gamma,
+            diag, s, local_field, energy, csr,
+            _fallback=_python_sa_loop,
+        )
 
         best_x = (best_s + 1.0) / 2.0
         if k is not None:

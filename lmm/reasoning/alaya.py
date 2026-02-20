@@ -10,7 +10,7 @@ Recall mechanism:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from scipy import sparse
@@ -23,6 +23,7 @@ class MemoryTrace:
     pattern: np.ndarray
     strength: float
     access_count: int = 0
+    metadata: dict = field(default_factory=dict)
 
 
 class AlayaMemory:
@@ -66,7 +67,7 @@ class AlayaMemory:
         self._J = sparse.lil_matrix((n_variables, n_variables))
         self._patterns: list[MemoryTrace] = []
 
-    def store(self, pattern: np.ndarray) -> None:
+    def store(self, pattern: np.ndarray, *, metadata: dict | None = None) -> None:
         """Store a pattern. Hebbian J update only when use_hebbian=True."""
         x = np.asarray(pattern).flatten()[:self.n]
         n = len(x)
@@ -85,7 +86,10 @@ class AlayaMemory:
                     self._J[i, j] = float(self._J[i, j]) + delta
                     self._J[j, i] = float(self._J[j, i]) + delta
 
-        self._patterns.append(MemoryTrace(pattern=x.copy(), strength=1.0))
+        self._patterns.append(MemoryTrace(
+            pattern=x.copy(), strength=1.0,
+            metadata=metadata or {},
+        ))
 
         # Prune oldest if over capacity
         if len(self._patterns) > self.max_patterns:
@@ -250,10 +254,14 @@ class AlayaMemory:
             results.append((sim, trace))
 
         results.sort(key=lambda x: x[0], reverse=True)
-        return [
-            f"pattern(strength={t.strength:.3f}, accesses={t.access_count})"
-            for _, t in results[:limit]
-        ]
+        out = []
+        for sim, t in results[:limit]:
+            text = t.metadata.get("text") if t.metadata else None
+            if text:
+                out.append(text[:120])
+            else:
+                out.append(f"pattern(sim={sim:.3f}, strength={t.strength:.3f})")
+        return out
 
     # sangha.py の hasattr(self.alaya, "search") および .search(text, limit=N) に対応
     search = search_by_text

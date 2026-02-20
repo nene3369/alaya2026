@@ -80,9 +80,9 @@ def _csr_parts(
             np.zeros(n + 1, dtype=np.int32),
         )
     return (
-        np.ascontiguousarray(csr.data,   dtype=np.float64),
-        np.ascontiguousarray(csr.indices, dtype=np.int32),
-        np.ascontiguousarray(csr.indptr,  dtype=np.int32),
+        np.array(csr.data,    dtype=np.float64),
+        np.array(csr.indices, dtype=np.int32),
+        np.array(csr.indptr,  dtype=np.int32),
     )
 
 
@@ -130,19 +130,22 @@ def run_sa_ising_loop(
     best_s : (n,) Ising-spin configuration at minimum energy seen.
     """
     if _HAS_RUST:
-        csr_d, csr_i, csr_p = _csr_parts(csr)
-        return _rc.solve_sa_ising_rust(
-            int(n),
-            int(n_iterations),
-            float(temp_start),
-            float(temp_end),
-            float(gamma),
-            np.ascontiguousarray(diag,        dtype=np.float64),
-            np.ascontiguousarray(s,           dtype=np.float64),
-            np.ascontiguousarray(local_field, dtype=np.float64),
-            float(energy),
-            csr_d, csr_i, csr_p,
-        )
+        try:
+            csr_d, csr_i, csr_p = _csr_parts(csr)
+            return _rc.solve_sa_ising_rust(
+                int(n),
+                int(n_iterations),
+                float(temp_start),
+                float(temp_end),
+                float(gamma),
+                np.asarray(diag,        dtype=np.float64),
+                np.asarray(s,           dtype=np.float64),
+                np.asarray(local_field, dtype=np.float64),
+                float(energy),
+                csr_d, csr_i, csr_p,
+            )
+        except Exception:
+            pass  # Fall through to Python fallback
 
     if _fallback is not None:
         return _fallback()
@@ -197,20 +200,23 @@ def run_fep_analog_loop(
     power_history : dissipation power recorded at each step
     """
     if _HAS_RUST:
-        csr_d, csr_i, csr_p = _csr_parts(csr)
-        v_out, steps_done, power_history = _rc.solve_fep_analog_rust(
-            np.ascontiguousarray(v_init, dtype=np.float64),
-            np.ascontiguousarray(v_s,    dtype=np.float64),
-            int(n),
-            float(g_prec_base),
-            float(tau_leak),
-            float(dt),
-            int(max_steps),
-            float(nirvana_threshold),
-            float(j_scale),
-            csr_d, csr_i, csr_p,
-        )
-        return v_out, steps_done, power_history
+        try:
+            csr_d, csr_i, csr_p = _csr_parts(csr)
+            v_out, steps_done, power_history = _rc.solve_fep_analog_rust(
+                np.asarray(v_init, dtype=np.float64),
+                np.asarray(v_s,    dtype=np.float64),
+                int(n),
+                float(g_prec_base),
+                float(tau_leak),
+                float(dt),
+                int(max_steps),
+                float(nirvana_threshold),
+                float(j_scale),
+                csr_d, csr_i, csr_p,
+            )
+            return v_out, steps_done, power_history
+        except Exception:
+            pass  # Fall through to Python fallback
 
     if _fallback is not None:
         return _fallback()

@@ -1520,7 +1520,8 @@ class DescentPipeline:
                     adapter.get("silence_ratio", 0.3),
                     (adapter.get("max_words", 100)) / 500,
                 ]
-            )
+            ),
+            metadata={"text": response_text[:200]} if response_text else {},
         )
         self.epoch += 1
         if self.epoch % 10 == 0:
@@ -1854,10 +1855,12 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(60)
             await sessions.cleanup()
 
-    task = asyncio.create_task(_cleanup_loop())
+    cleanup_task = asyncio.create_task(_cleanup_loop())
+    topology_task = asyncio.create_task(_topology_singleton())
     yield
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
+    cleanup_task.cancel()
+    topology_task.cancel()
+    await asyncio.gather(cleanup_task, topology_task, return_exceptions=True)
 
 
 app = FastAPI(
@@ -1920,34 +1923,49 @@ class TopologyWSManager:
 _topology_ws = TopologyWSManager()
 
 
-async def _topology_recorder(pipeline: DescentPipeline) -> None:
-    """Background coroutine: periodically re-evaluate topology and record history."""
+async def _topology_singleton() -> None:
+    """Singleton background task: periodically re-evaluate topology and broadcast.
+
+    Runs once in the application lifespan (not per session) to avoid
+    O(N×M) broadcast storms and competing file writes.
+    """
+    # Lazily initialise shared topology state
+    history = None
+    drift = None
+    history_path = None
+    try:
+        from lmm.dharma.topology import TopologyDriftDetector, TopologyHistory
+        history = TopologyHistory(maxlen=200)
+        drift = TopologyDriftDetector(
+            window=10, z_threshold=2.5, min_delta=0.05,
+        )
+        history_path = Path(__file__).resolve().parent / "topology_history.json"
+        history.load(history_path)
+    except Exception:
+        pass
+
     while True:
         await asyncio.sleep(30)
         try:
-            if pipeline._gprec_matrix is None or pipeline._topology_history is None:
+            if get_cached_gprec is None:
                 continue
-            if pipeline._gprec_matrix.shape[0] == 0:
+            lmm_root = Path(__file__).resolve().parent / "lmm"
+            # Run blocking I/O (os.walk + AST parsing) in thread pool
+            matrix, labels = await asyncio.to_thread(get_cached_gprec, lmm_root)
+            if matrix.shape[0] == 0:
                 continue
-            # Re-check cache (picks up file changes)
-            if get_cached_gprec is not None:
-                lmm_root = Path(__file__).resolve().parent / "lmm"
-                matrix, labels = get_cached_gprec(lmm_root)
-                pipeline._gprec_matrix = matrix
-                pipeline._gprec_labels = labels
-            from lmm.dharma.topology import TopologyEvaluator
 
+            from lmm.dharma.topology import TopologyEvaluator
             evaluator = TopologyEvaluator(deleteability_method="degree")
-            telemetry = evaluator.evaluate(
-                pipeline._gprec_matrix,
-                node_labels=pipeline._gprec_labels,
-            )
-            pipeline._topology_history.record(telemetry)
+            telemetry = evaluator.evaluate(matrix, node_labels=labels)
+
+            if history is not None:
+                history.record(telemetry)
 
             # Drift detection
             alerts: list[dict] = []
-            if pipeline._topology_drift is not None:
-                new_alerts = pipeline._topology_drift.check(telemetry)
+            if drift is not None:
+                new_alerts = drift.check(telemetry)
                 alerts = [
                     {
                         "timestamp": a.timestamp,
@@ -1959,19 +1977,19 @@ async def _topology_recorder(pipeline: DescentPipeline) -> None:
                     for a in new_alerts
                 ]
 
-            # Persistence: save after each recording
-            if hasattr(pipeline, "_topology_history_path"):
+            # Persistence (single writer — no concurrent .tmp corruption)
+            if history_path is not None and history is not None:
                 try:
-                    pipeline._topology_history.save(pipeline._topology_history_path)
+                    history.save(history_path)
                 except Exception:
                     pass
 
-            # WebSocket broadcast
+            # WebSocket broadcast (once, not N times)
             if _topology_ws.connection_count > 0:
                 payload = {
                     "type": "topology_update",
                     "topology": telemetry.to_json(),
-                    "trend": pipeline._topology_history.trend(),
+                    "trend": history.trend() if history else {},
                     "alerts": alerts,
                 }
                 await _topology_ws.broadcast(payload)
@@ -1993,10 +2011,9 @@ class SessionManager:
         lru_key = min(self._sessions, key=lambda k: self._sessions[k][1])
         pipe, _ = self._sessions.pop(lru_key)
         pipe.heartbeat.stop()
-        for attr in ("_heartbeat_task", "_topology_task"):
-            task = getattr(pipe, attr, None)
-            if task and not task.done():
-                task.cancel()
+        task = getattr(pipe, "_heartbeat_task", None)
+        if task and not task.done():
+            task.cancel()
 
     async def get(self, session_id: str | None = None) -> DescentPipeline:
         key = session_id or "__default__"
@@ -2011,7 +2028,7 @@ class SessionManager:
             pipe = DescentPipeline()
             # Start heartbeat daemon for this session
             pipe._heartbeat_task = asyncio.create_task(pipe.heartbeat.run())
-            pipe._topology_task = asyncio.create_task(_topology_recorder(pipe))
+            # Topology recording is handled by _topology_singleton (lifespan)
             self._sessions[key] = (pipe, time.time())
             return pipe
 
@@ -2025,8 +2042,6 @@ class SessionManager:
                 pipe.heartbeat.stop()
                 if pipe._heartbeat_task is not None:
                     pipe._heartbeat_task.cancel()
-                if pipe._topology_task is not None:
-                    pipe._topology_task.cancel()
                 del self._sessions[sid]
 
     @property
